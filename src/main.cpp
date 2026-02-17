@@ -7,7 +7,6 @@
 
  #include <Arduino.h>
  #include <Wire.h>
- //#include <XPowersAXP2101.tpp> // Явное подключение реализации для AXP2101
  #include <XPowersLib.h>
  #include "SSD1306Wire.h"      // OLED Driver
  #include "configuration.h"    // Our Custom Pinout
