@@ -1,0 +1,7 @@
+.pio
+.vscode
+.cursor
+*.orig
+*.swp
+*.bak
+.DS_Store
