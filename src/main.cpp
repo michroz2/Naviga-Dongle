@@ -1,7 +1,7 @@
 /**
  * Project: Dongle (T-Beam v1.1 Custom E22)
  * File: main.cpp
- * Description: Display Navigation UI + Full GPS Logging + Full LoRa Init
+ * Description: Display Navigation UI + Full GPS Logging + LoRa Interrupt Reception
  */
 
  #include <Arduino.h>
@@ -23,6 +23,16 @@
  // Радиомодуль E22 (SX1268)
  SX1268 radio = new Module(LORA_CS, LORA_DIO1, LORA_RST, LORA_BUSY);
  
+ // --- ПЕРЕМЕННЫЕ И ОБРАБОТЧИКИ ПРИЕМА ---
+ volatile bool receivedFlag = false; // Флаг поступления данных
+ // Обработчик аппаратного прерывания (ISR)
+ #if defined(ESP8266) || defined(ESP32)
+   ICACHE_RAM_ATTR
+ #endif
+ void setFlag(void) {
+     receivedFlag = true;
+ }
+
  // Переменные навигации
  float dist = 0.0;
  float azmt = 0.0;
@@ -98,12 +108,6 @@
          // 5.1 Настройка частоты (433.0 MHz)
          radio.setFrequency(433.0);
 
-         // 5.2 Настройка регулятора напряжения (DC-DC для высокой эффективности)
-        //  state = radio.setRegulatorMode(RADIOLIB_SX126X_REGULATOR_DC_DC);
-        //  if (state != RADIOLIB_ERR_NONE) {
-        //      LOG_ERROR("LORA", "Regulator setup failed, code: %d", state);
-        //  }
-
          // 5.3 Отключение управления RF-переключателем через пин DIO2
          // Управление осуществляется внешними пинами LORA_RXEN/LORA_TXEN
          radio.setDio2AsRfSwitch(false);
@@ -114,8 +118,9 @@
          radio.setBandwidth(125.0);
          radio.setSpreadingFactor(9);
          radio.setCodingRate(5);
-         radio.setSyncWord(0x12); // Private Network
- 
+         radio.setSyncWord(0x2B);       // Стандарт Meshtastic
+         radio.setPreambleLength(16);   // Стандарт Meshtastic  
+         
          // 5.5 Настройка выходной мощности
          // +22 dBm - это максимум для чипа SX1268. 
          // Внешний усилитель модуля E22 усилит это до +30..33 dBm.
@@ -131,11 +136,25 @@
  
          // 5.7 Антенный переключатель (RXEN/TXEN)
          radio.setRfSwitchPins(LORA_RXEN, LORA_TXEN);
+
+         // 5.8 Дополнительное усиление приемника (RX Boosted Gain)
+         // Режим повышает чувствительность LNA.
+         state = radio.setRxBoostedGainMode(true);
+         if (state != RADIOLIB_ERR_NONE) {
+             LOG_ERROR("LORA", "RX Boost setup failed, code: %d", state);
+         } else {
+             LOG_INFO("LORA", "RX Boosted Gain: ENABLED");
+         }
+
+         // 5.9 Установка прерывания и запуск приема
+         radio.setPacketReceivedAction(setFlag);
+         state = radio.startReceive();
          
-         // 5.8 Перевод в Standby (Готовность)
-         radio.standby();
-         LOG_INFO("LORA", "Setup Complete -> STANDBY");
-         LOG_INFO("LORA", "Params: 433MHz, SF9, BW125, Pwr:22dBm(Max)");
+         if (state == RADIOLIB_ERR_NONE) {
+             LOG_INFO("LORA", "Reception STARTED");
+         } else {
+             LOG_ERROR("LORA", "Start receive failed, code: %d", state);
+         }
  
      } else {
          LOG_ERROR("LORA", "Init FAILED, code: %d", state);
@@ -151,6 +170,30 @@
  }
  
  void loop() {
+     // 0. ОБРАБОТКА ПОСТУПИВШИХ ДАННЫХ LORA
+     if (receivedFlag) {
+         // Кратковременная блокировка для безопасного сброса флага
+         noInterrupts();
+         receivedFlag = false;
+         interrupts();
+
+         String data;
+         int state = radio.readData(data);
+
+         if (state == RADIOLIB_ERR_NONE) {
+             LOG_INFO("LORA", "Packet Received!");
+             LOG_INFO("LORA", "Data: %s", data.c_str());
+             LOG_INFO("LORA", "RSSI: %.2f dBm | SNR: %.2f dB", radio.getRSSI(), radio.getSNR());
+         } else if (state == RADIOLIB_ERR_CRC_MISMATCH) {
+             LOG_WARN("LORA", "CRC Error!");
+         } else {
+             LOG_ERROR("LORA", "Reception failed, code: %d", state);
+         }
+
+         // Перезапуск приемника (только после полной обработки текущего пакета)
+         radio.startReceive();
+     }
+
      while (GPS_Serial.available() > 0) {
          gps.encode(GPS_Serial.read());
      }
