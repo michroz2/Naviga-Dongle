@@ -51,4 +51,8 @@
 #define GPS_RX      34
 #define GPS_TX      12
 
+// --- НАСТРОЙКИ ПЕРИОДИЧНОСТИ ---
+uint32_t txInterval = 15000;      // Интервал передачи координат (мс)
+uint32_t gpsUpdateInterval = 1000; // Интервал обновления GPS данных (мс)
+
 #endif
