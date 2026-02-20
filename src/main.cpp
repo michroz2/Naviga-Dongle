@@ -48,6 +48,7 @@
  // --- ТАЙМЕРЫ УПРАВЛЕНИЯ ПОТОКАМИ (ПЛАНИРОВЩИК) ---
  uint32_t lastTxTime = 0;                               // Время (в мс) последней отправки координат в эфир
  uint32_t lastGpsLogTime = 0;                           // Время (в мс) последнего обновления дисплея и логов
+ uint32_t lastRxTime = 0;                               // Время (в мс) последнего успешного приема чужих координат
 
  // --- ФУНКЦИИ ИНТЕРФЕЙСА ---
 
@@ -306,6 +307,10 @@
          LOG_ERROR("TX", "Transmission failed, code: %d", state);
      } // if (transmit state) else
 
+     // ХИРУРГИЧЕСКОЕ ВМЕШАТЕЛЬСТВО: 
+     // Очистка флага прерывания, который гарантированно взвелся событием "TxDone" (окончание передачи)
+     receivedFlag = false;
+
      // Возврат модуля в режим прослушивания эфира после окончания передачи
      radio.startReceive();
  } // sendLocation()
@@ -375,44 +380,51 @@
 
          // Получение длины принятого пакета
          size_t len = radio.getPacketLength();
-         uint8_t rxBuffer[256];             
-         int state = radio.readData(rxBuffer, len); // Чтение данных из FIFO буфера радиомодуля
 
-         if (state == RADIOLIB_ERR_NONE) {
-             LOG_INFO("LORA", "Packet Received! Length: %d bytes", len);
-             
-             // Если длина совпадает с ожидаемой (8 байт = две координаты Int32)
-             if (len == 8) {
-                 int32_t latInt, lonInt;
-                 memcpy(&latInt, rxBuffer, 4);
-                 memcpy(&lonInt, rxBuffer + 4, 4);
+         // ЗАЩИТНАЯ БРОНЯ: Фильтрация фантомных пакетов (ложных прерываний от шума)
+         if (len > 0) {
+             uint8_t rxBuffer[256];             
+             int state = radio.readData(rxBuffer, len); // Чтение данных из FIFO буфера радиомодуля
 
-                 // Конвертация из Int32 обратно в формат Float (градусы)
-                 remoteLat = latInt / 100000.0;
-                 remoteLon = lonInt / 100000.0;
+             if (state == RADIOLIB_ERR_NONE) {
+                 LOG_INFO("LORA", "Packet Received! Length: %d bytes", len);
+                 
+                 // Если длина совпадает с ожидаемой (8 байт = две координаты Int32)
+                 if (len == 8) {
+                     int32_t latInt, lonInt;
+                     memcpy(&latInt, rxBuffer, 4);
+                     memcpy(&lonInt, rxBuffer + 4, 4);
 
-                 LOG_INFO("LORA", "Remote Location Extracted: Lat: %.6f, Lon: %.6f", remoteLat, remoteLon);
-                 LOG_INFO("LORA", "RSSI: %.2f dBm | SNR: %.2f dB", radio.getRSSI(), radio.getSNR());
+                     // Конвертация из Int32 обратно в формат Float (градусы)
+                     remoteLat = latInt / 100000.0;
+                     remoteLon = lonInt / 100000.0;
+
+                     // Обновление таймера приема для расчета таймаута (30 сек)
+                     lastRxTime = millis();
+
+                     LOG_INFO("LORA", "Remote Location Extracted: Lat: %.6f, Lon: %.6f", remoteLat, remoteLon);
+                     LOG_INFO("LORA", "RSSI: %.2f dBm | SNR: %.2f dB", radio.getRSSI(), radio.getSNR());
+                 } else {
+                     // Обработка пакета неизвестной длины/формата (вывод дампа в HEX)
+                     String hexStr = "";
+                     for (size_t i = 0; i < len; i++) {
+                         char buf[4];
+                         sprintf(buf, "%02X ", rxBuffer[i]);
+                         hexStr += buf;
+                     } // for (len)
+                     LOG_INFO("LORA", "Unknown Data (HEX): %s", hexStr.c_str());
+                 } // if (len == 8) else
+                 
+             } else if (state == RADIOLIB_ERR_CRC_MISMATCH) {
+                 // Пакет получен, но контрольная сумма не совпадает (повреждение в эфире)
+                 LOG_WARN("LORA", "CRC Error!");
              } else {
-                 // Обработка пакета неизвестной длины/формата (вывод дампа в HEX)
-                 String hexStr = "";
-                 for (size_t i = 0; i < len; i++) {
-                     char buf[4];
-                     sprintf(buf, "%02X ", rxBuffer[i]);
-                     hexStr += buf;
-                 } // for (len)
-                 LOG_INFO("LORA", "Unknown Data (HEX): %s", hexStr.c_str());
-             } // if (len == 8) else
-             
-         } else if (state == RADIOLIB_ERR_CRC_MISMATCH) {
-             // Пакет получен, но контрольная сумма не совпадает (повреждение в эфире)
-             LOG_WARN("LORA", "CRC Error!");
-         } else {
-             // Аппаратная ошибка при чтении буфера модема
-             LOG_ERROR("LORA", "Reception failed, code: %d", state);
-         } // if (readData state) else if else
+                 // Аппаратная ошибка при чтении буфера модема
+                 LOG_ERROR("LORA", "Reception failed, code: %d", state);
+             } // if (readData state) else if else
+         } // if (len > 0)
          
-         // Перезапуск модуля в режим приема после обработки пакета
+         // Перезапуск модуля в режим приема после обработки пакета (или игнорирования фантома)
          radio.startReceive();
      } // if (receivedFlag)
 
@@ -437,20 +449,53 @@
          digitalWrite(LED_PIN, !digitalRead(LED_PIN)); 
          
          String gpsStatus;
+         String distStr;
+         String azmtStr;
          int sats = gps.satellites.value(); // Количество видимых спутников
  
-         // Формирование строки статуса GPS в зависимости от наличия FIX-а
-         if (gps.location.isValid()) {
+         // НЕЗАВИСИМАЯ ПРОВЕРКА ТАЙМАУТА LORA (выполняется всегда)
+         bool isRemoteValid = false;
+         if (lastRxTime == 0 || (millis() - lastRxTime > 30000)) {
+             // Связь с удаленным устройством потеряна более 30 сек назад (или еще не установлена)
+             distStr = "Dist: ???";
+             azmtStr = "Azmt: ???";
+             LOG_WARN("LORA", "Remote signal timeout (> 30s) or not established");
+         } else {
+             // Связь активна, чужие координаты актуальны
+             isRemoteValid = true;
+         } // if (lastRxTime check) else
+ 
+         // ЛОГИКА ОТОБРАЖЕНИЯ СВОЕГО GPS И РАСЧЕТОВ
+         if (!gps.location.isValid()) {
+             // Наши координаты невалидны (потерян сигнал GPS)
+             gpsStatus = (sats > 0) ? ("GPS Wait " + String(sats)) : "GPS ERROR";
+             
+             // Если мы потеряли свои координаты, мы не можем рассчитать дистанцию, даже если чужие есть
+             distStr = "Dist: ***";
+             azmtStr = "Azmt: ***";
+         } else {
+             // Наши координаты валидны
              gpsStatus = "GPS OK " + String(sats);
              LOG_INFO("GPS", "Fix OK! Pos: %.6f, %.6f | Alt: %.1fm", 
                       gps.location.lat(), gps.location.lng(), gps.altitude.meters());
-         } else if (sats > 0) {
-             gpsStatus = "GPS Wait " + String(sats);
-         } else {
-             gpsStatus = "GPS ERROR";
-         } // if (isValid) else if else
+                      
+             // Если обе точки валидны - производим расчет
+             if (isRemoteValid) {
+                 dist = TinyGPSPlus::distanceBetween(
+                     gps.location.lat(), gps.location.lng(), 
+                     remoteLat, remoteLon
+                 );
+                 azmt = TinyGPSPlus::courseTo(
+                     gps.location.lat(), gps.location.lng(), 
+                     remoteLat, remoteLon
+                 );
+                 
+                 distStr = "Dist: " + String((int)dist) + " m";
+                 azmtStr = "Azmt: " + String((int)azmt) + " deg";
+             } // if (isRemoteValid)
+         } // if (!isValid) else
  
          // Обновление информации на OLED дисплее
-         showStatus(gpsStatus, "Dist: " + String(dist, 1), "Azmt: " + String(azmt, 1));
+         showStatus(gpsStatus, distStr, azmtStr);
      } // if (gpsUpdateInterval)
  } // loop()
