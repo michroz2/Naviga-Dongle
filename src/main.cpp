@@ -1,7 +1,7 @@
 /**
  * Project: Naviga-Dongle (T-Beam v1.1 Custom E22 + Universal GPS)
  * File: main.cpp
- * Version: 1.1
+ * Version: 1.4
  * Description: Система логирования GPS координат, умная инициализация GPS
  * и обмен данными через LoRa (SX1268). Основной файл программы.
  */
@@ -16,7 +16,13 @@
  #include "configuration.h"
  #include "logger.h"           
  #include "GeoPacker.h"        // Подключаем класс компактной упаковки координат
- 
+ #include "NavigaProtocol.h"
+
+ // Шаг 1.2: Динамический ID устройства (1-254), генерируется случайно при старте
+ uint8_t myNodeId = 0; 
+ // Глобальный счетчик отправленных сообщений узла
+ uint8_t myMsgSeq = 0;
+
  // --- ОБЪЕКТЫ УПРАВЛЕНИЯ ПЕРИФЕРИЕЙ ---
  XPowersAXP2101 pmu;                                    // Объект для управления контроллером питания (PMU)
  SSD1306Wire display(0x3c, I2C_SDA, I2C_SCL);           // Объект управления OLED дисплеем по шине I2C (адрес 0x3C)
@@ -48,6 +54,8 @@
  float remoteLat = 0.0;                                 // Широта, полученная по радиоканалу
  float remoteLon = 0.0;                                 // Долгота, полученная по радиоканалу
  float lastSNR = 0.0;                                   // SNR (Отношение сигнал/шум) последнего принятого пакета
+ uint8_t lastRxNodeId = 0;                              // ID последнего принятого узла
+ uint8_t lastRxSeq = 0;                                 // Номер последнего принятого сообщения от этого узла
 
  // --- ТАЙМЕРЫ И ФЛАГИ СОСТОЯНИЙ ---
  uint32_t lastTxTime = 0;                               // Время (в мс) последней отправки координат в эфир
@@ -245,21 +253,30 @@
          return;
      } // if invalid
 
-     // Упаковываем координаты в компактные 4 байта (uint32_t)
+     // 1. Упаковываем координаты в компактные 4 байта (uint32_t)
      uint32_t packedCoords = packer.pack(gps.location.lat(), gps.location.lng());
      
-     uint8_t txBuffer[4];
-     memcpy(txBuffer, &packedCoords, 4);
+     // 2. Формируем универсальный заголовок (4 байта)
+     NavigaHeader txHeader;
+     txHeader.senderId = myNodeId;
+     txHeader.relayId = myNodeId; // При первичной отправке мы сами являемся ретранслятором
+     txHeader.msgSeq = myMsgSeq++;
+     txHeader.setTypeAndTTL(MSG_COORDS, 15); // Тип сообщения: координаты, TTL = 15
      
-     LOG_INFO("TX", "Starting transmission... (Packed: 0x%08X)", packedCoords);
+     // 3. Собираем полный пакет из 8 байт (Заголовок + Полезная нагрузка)
+     uint8_t txBuffer[8];
+     memcpy(txBuffer, &txHeader, sizeof(NavigaHeader));
+     memcpy(txBuffer + 4, &packedCoords, sizeof(packedCoords));
+     
+     LOG_INFO("TX", "Starting TX... Seq: %d, Packed: 0x%08X", txHeader.msgSeq, packedCoords);
      
      radio.standby();
-     int state = radio.transmit(txBuffer, 4); // Передаем теперь 4 байта
+     int state = radio.transmit(txBuffer, 8); // Отправляем 8 байт
      if (state == RADIOLIB_ERR_NONE) {
          LOG_INFO("TX", "Transmission finished successfully.");
      } else {
          LOG_ERROR("TX", "Transmission failed, code: %d", state);
-     } // if state
+     } // if state else
      
      receivedFlag = false;
      radio.startReceive();
@@ -292,6 +309,14 @@
      showLogo();
      initGPS();
      initLoRa();
+
+     // Инициализируем генератор случайных чисел аппаратно (для ESP32)
+     randomSeed(esp_random());
+     // Генерируем случайный ID от 1 до 254 (0 - резерв, 255 - broadcast)
+     // Функция random(min, max) возвращает число от min до max-1
+     myNodeId = random(1, 255);
+     LOG_INFO("SYS", "Generated Node ID: %d", myNodeId);
+
      LOG_INFO("SYS", "Setup completed successfully! System is READY.");
  } // setup()
  
@@ -314,22 +339,41 @@
                  LOG_INFO("LORA", "Packet Received! Length: %d bytes", len);
                  lastSNR = radio.getSNR();
                  
-                 // Если длина совпадает с ожидаемой (теперь 4 байта = GeoPacker)
-                 if (len == 4) {
-                     // Мы можем распаковать координаты ТОЛЬКО если у нас есть свои опорные координаты
-                     if (gps.location.isValid()) {
-                         uint32_t packedCoords;
-                         memcpy(&packedCoords, rxBuffer, 4);
-                         
-                         // Распаковываем координаты относительно нашей позиции
-                         packer.unpack(packedCoords, gps.location.lat(), gps.location.lng(), remoteLat, remoteLon);
-                         
-                         lastRxTime = millis();
-                         isTimeoutLogged = false; // Сбрасываем флаг, так как связь восстановлена
-                         LOG_INFO("LORA", "Remote Location Extracted: Lat: %.6f, Lon: %.6f", remoteLat, remoteLon);
+                 // Ожидаем 8 байт (4 байта заголовок Naviga + 4 байта полезной нагрузки COORDS)
+                 if (len == 8) {
+                     NavigaHeader rxHeader;
+                     memcpy(&rxHeader, rxBuffer, sizeof(NavigaHeader));
+                     
+                     // 1. Проверяем тип пакета
+                     if (rxHeader.getType() == MSG_COORDS) {
+                         // 2. Защита от приема собственных пакетов (если они как-то вернулись)
+                         if (rxHeader.senderId == myNodeId) {
+                             LOG_WARN("LORA", "Received our own packet. Ignored.");
+                         } else {
+                             LOG_INFO("LORA", "Valid COORDS pkt from Node %d (Relay: %d, Seq: %d, TTL: %d)", 
+                                      rxHeader.senderId, rxHeader.relayId, rxHeader.msgSeq, rxHeader.getTTL());
+                             
+                             // 3. Распаковка только при наличии собственного фикса
+                             if (gps.location.isValid()) {
+                                 uint32_t packedCoords;
+                                 memcpy(&packedCoords, rxBuffer + 4, 4); // Берем 4 байта после заголовка
+                                 
+                                 packer.unpack(packedCoords, gps.location.lat(), gps.location.lng(), remoteLat, remoteLon);
+                                 
+                                 // Сохраняем ID и номер сообщения для вывода на дисплей
+                                 lastRxNodeId = rxHeader.senderId;
+                                 lastRxSeq = rxHeader.msgSeq;
+
+                                 lastRxTime = millis();
+                                 isTimeoutLogged = false; 
+                                 LOG_INFO("LORA", "Remote Extracted: Lat: %.6f, Lon: %.6f", remoteLat, remoteLon);
+                             } else {
+                                 LOG_WARN("LORA", "COORDS pkt received, but local GPS not valid for unpacking!");
+                             } // if isValid else
+                         } // if own packet else
                      } else {
-                         LOG_WARN("LORA", "Packed coords received, but local GPS not valid for unpacking!");
-                     } // if isValid else
+                         LOG_WARN("LORA", "Packet type is not MSG_COORDS (Type: %d)", rxHeader.getType());
+                     } // if type == MSG_COORDS else
                  } else {
                      String hexStr = "";
                      for (size_t i = 0; i < len; i++) {
@@ -337,8 +381,8 @@
                          sprintf(buf, "%02X ", rxBuffer[i]);
                          hexStr += buf;
                      } // for
-                     LOG_INFO("LORA", "Unknown Data (HEX): %s", hexStr.c_str());
-                 } // if len 4 else
+                     LOG_INFO("LORA", "Unknown Data/Length (HEX): %s", hexStr.c_str());
+                 } // if len 8 else
              } else if (state == RADIOLIB_ERR_CRC_MISMATCH) {
                  LOG_WARN("LORA", "CRC Error!");
              } else {
@@ -361,40 +405,34 @@
          lastGpsLogTime = millis();
          digitalWrite(LED_PIN, !digitalRead(LED_PIN)); 
          
-         String gpsStatus, distStr, azmtStr;
+         String line1, line2, line3, line4;
          int sats = gps.satellites.value();
  
          // Проверка таймаута связи
          bool isRemoteValid = false;
          if (lastRxTime == 0 || (millis() - lastRxTime > 30000)) {
-             distStr = "Dist: ???";
-             azmtStr = "Azmt: ???";
-             
              // Логируем предупреждение ОДИН РАЗ за период таймаута
              if (!isTimeoutLogged) {
                  LOG_WARN("LORA", "Remote signal timeout (> 30s) or not established");
                  isTimeoutLogged = true; // Блокируем повторный вывод до получения нового пакета
-             } // if not logged
+             } // if (!isTimeoutLogged)
          } else {
              isRemoteValid = true;
-         } // if timeout else
+         } // if (timeout) else
  
-         // Проверка своего GPS и расчеты
+         // Строка 1: Статус GPS
          if (!gps.location.isValid()) {
-             gpsStatus = (sats > 0) ? ("GPS Wait " + String(sats)) : "GPS ERROR";
-             distStr = "Dist: ***";
-             azmtStr = "Azmt: ***";
+             line1 = (sats > 0) ? ("GPS Wait " + String(sats)) : "GPS ERROR";
          } else {
-             gpsStatus = "GPS OK " + String(sats);
+             line1 = "GPS OK " + String(sats);
              
              // ОДНОКРАТНАЯ ИНИЦИАЛИЗАЦИЯ МАСШТАБА ДОЛГОТЫ
              if (!isLonScaleSet) {
                  packer.updateLonScale(gps.location.lat());
                  isLonScaleSet = true;
                  LOG_INFO("GPS", "LonScale locked to: %.2f", packer.getLonScale());
-             } // if not set
+             } // if (!isLonScaleSet)
 
-             // ИЗМЕНЕНИЕ ЗДЕСЬ: Вывод сырого HDOP и примерной точности в метрах
              LOG_INFO("GPS", "Fix OK! Pos: %.6f, %.6f | Alt: %.1fm | HDOP: %.1f (~%dm)", 
                       gps.location.lat(), gps.location.lng(), gps.altitude.meters(), 
                       gps.hdop.hdop(), (int)(gps.hdop.hdop() * 2.5));
@@ -402,11 +440,22 @@
              if (isRemoteValid) {
                  dist = TinyGPSPlus::distanceBetween(gps.location.lat(), gps.location.lng(), remoteLat, remoteLon);
                  azmt = TinyGPSPlus::courseTo(gps.location.lat(), gps.location.lng(), remoteLat, remoteLon);
-                 distStr = "Dist: " + String((int)dist) + " m";
-                 azmtStr = "Azmt: " + String((int)azmt) + " deg";
-             } // if remote valid
-         } // if gps valid else
+             } // if (isRemoteValid)
+         } // if (!isValid) else
  
-         showStatus(gpsStatus, distStr, azmtStr, "Conn: " + String(getConnectionQuality()));
+         // Строка 2: Наш ID и счетчик сообщений
+         line2 = "My: " + String(myNodeId) + "-" + String(myMsgSeq);
+         
+         // Строка 3: ID и счетчик удаленного узла
+         if (isRemoteValid) {
+             line3 = "Rx: " + String(lastRxNodeId) + "-" + String(lastRxSeq);
+             // Строка 4: Дистанция / Азимут / Качество связи
+             line4 = String((int)dist) + "m / " + String((int)azmt) + " / " + String(getConnectionQuality());
+         } else {
+             line3 = "Rx: ---";
+             line4 = "??? / ??? / 0";
+         } // if (isRemoteValid) else
+
+         showStatus(line1, line2, line3, line4);
      } // if displayInterval
  } // loop()
