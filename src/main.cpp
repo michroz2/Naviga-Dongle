@@ -1,7 +1,7 @@
 /**
  * Project: Naviga-Dongle (T-Beam v1.1 Custom E22 + Universal GPS)
  * File: main.cpp
- * Version: 1.4
+ * Version: 1.2.1
  * Description: Система логирования GPS координат, умная инициализация GPS
  * и обмен данными через LoRa (SX1268). Основной файл программы.
  */
@@ -17,6 +17,7 @@
  #include "logger.h"           
  #include "GeoPacker.h"        // Подключаем класс компактной упаковки координат
  #include "NavigaProtocol.h"
+ #include "NodeDatabase.h"     // Подключаем базу данных узлов
 
  // Шаг 1.2: Динамический ID устройства (1-254), генерируется случайно при старте
  uint8_t myNodeId = 0; 
@@ -29,6 +30,7 @@
  TinyGPSPlus gps;                                       // Объект парсера NMEA строк для обработки данных GPS
  HardwareSerial GPS_Serial(1);                          // Объпаратный UART порт (UART1) для связи с GPS модулем
  GeoPacker packer;                                      // Объект для упаковки/распаковки координат в 4 байта
+ NodeDatabase nodeDB;                                   // Объект базы данных для хранения информации о соседях
  
  // Инициализация радиомодуля SX1268 с указанием пинов управления из configuration.h
  SX1268 radio = new Module(LORA_CS, LORA_DIO1, LORA_RST, LORA_BUSY);
@@ -51,33 +53,37 @@
  // Глобальные переменные навигационных данных
  float dist = 0.0;                                      // Дистанция (в метрах) от текущей точки до удаленного объекта
  float azmt = 0.0;                                      // Азимут (в градусах) от текущей точки на удаленный объект
- float remoteLat = 0.0;                                 // Широта, полученная по радиоканалу
- float remoteLon = 0.0;                                 // Долгота, полученная по радиоканалу
  float lastSNR = 0.0;                                   // SNR (Отношение сигнал/шум) последнего принятого пакета
- uint8_t lastRxNodeId = 0;                              // ID последнего принятого узла
- uint8_t lastRxSeq = 0;                                 // Номер последнего принятого сообщения от этого узла
+ uint8_t lastTargetId = 0;                              // ID последнего услышанного узла (для интерфейса)
 
  // --- ТАЙМЕРЫ И ФЛАГИ СОСТОЯНИЙ ---
  uint32_t lastTxTime = 0;                               // Время (в мс) последней отправки координат в эфир
  uint32_t lastGpsLogTime = 0;                           // Время (в мс) последнего обновления дисплея и логов
- uint32_t lastRxTime = 0;                               // Время (в мс) последнего успешного приема чужих координат
- bool isTimeoutLogged = false;                          // Флаг для предотвращения спама в лог при таймауте
+// ИЗМЕНЕНИЕ НАЧАЛО
+/*
+*/
+ uint32_t lastCleanupTime = 0;                          // Время последней очистки базы узлов
+// КОНЕЦ ИЗМЕНЕНИЯ
  bool isLonScaleSet = false;                            // Флаг единоразовой установки множителя долготы
 
  // --- ФУНКЦИИ ИНТЕРФЕЙСА ---
 
  /**
   * @brief Рассчитывает качество радиосвязи от 0 до 10.
-  * 0 - нет связи (таймаут).
-  * 1..10 - вычисляется на основе SNR (Signal-to-Noise Ratio).
   */
- int getConnectionQuality() {
-     // Если пакетов не было больше 30 секунд или вообще не было
-     if (lastRxTime == 0 || (millis() - lastRxTime > 30000)) {
+ int getConnectionQuality(uint8_t targetId) {
+     const NodeRecord* target = nodeDB.getNode(targetId);
+     
+     // Если узел не найден в базе или мы вообще никого не слышали
+     if (target == nullptr || targetId == 0) {
          return 0;
-     } // if (timeout)
+     } // if not found
 
-     // LoRa может демодулировать сигнал при SNR до -20 дБ. Отличным считается SNR > +5 дБ.
+     // Если мы не слышали ИМЕННО ЭТОТ узел больше 30 секунд (это локальный таймаут связи для интерфейса)
+     if (millis() - target->lastSeen > 30000) {
+         return 0;
+     } // if timeout
+
      int q = map((long)lastSNR, -20, 5, 1, 10);
      
      if (q < 1) q = 1;
@@ -313,7 +319,6 @@
      // Инициализируем генератор случайных чисел аппаратно (для ESP32)
      randomSeed(esp_random());
      // Генерируем случайный ID от 1 до 254 (0 - резерв, 255 - broadcast)
-     // Функция random(min, max) возвращает число от min до max-1
      myNodeId = random(1, 255);
      LOG_INFO("SYS", "Generated Node ID: %d", myNodeId);
 
@@ -358,15 +363,16 @@
                                  uint32_t packedCoords;
                                  memcpy(&packedCoords, rxBuffer + 4, 4); // Берем 4 байта после заголовка
                                  
-                                 packer.unpack(packedCoords, gps.location.lat(), gps.location.lng(), remoteLat, remoteLon);
+                                 float unpLat, unpLon;
+                                 packer.unpack(packedCoords, gps.location.lat(), gps.location.lng(), unpLat, unpLon);
                                  
-                                 // Сохраняем ID и номер сообщения для вывода на дисплей
-                                 lastRxNodeId = rxHeader.senderId;
-                                 lastRxSeq = rxHeader.msgSeq;
+                                 // Записываем полученные координаты в базу данных
+                                 nodeDB.updateNodeCoords(rxHeader.senderId, unpLat, unpLon);
+                                 
+                                 // Сохраняем ID для интерфейса (чтобы знать, на кого мы сейчас "смотрим")
+                                 lastTargetId = rxHeader.senderId;
 
-                                 lastRxTime = millis();
-                                 isTimeoutLogged = false; 
-                                 LOG_INFO("LORA", "Remote Extracted: Lat: %.6f, Lon: %.6f", remoteLat, remoteLon);
+                                 LOG_INFO("LORA", "Extracted & Saved in DB: Node %d -> Lat: %.6f, Lon: %.6f", rxHeader.senderId, unpLat, unpLon);
                              } else {
                                  LOG_WARN("LORA", "COORDS pkt received, but local GPS not valid for unpacking!");
                              } // if isValid else
@@ -400,31 +406,54 @@
          } // if air free
      } // if txInterval
 
+// ИЗМЕНЕНИЕ НАЧАЛО
+/*
+*/
+     // 3.1. ПЕРИОДИЧЕСКАЯ ОЧИСТКА БАЗЫ (Раз в 5 минут)
+     if (millis() - lastCleanupTime >= NODE_TIMEOUT_MS) {
+         lastCleanupTime = millis();
+         nodeDB.cleanup();
+         LOG_INFO("SYS", "Node database cleanup performed.");
+     } // if (cleanup)
+// КОНЕЦ ИЗМЕНЕНИЯ
+
      // 4. ОБНОВЛЕНИЕ ДИСПЛЕЯ И ЛОГИРОВАНИЕ ТАЙМАУТА
      if (millis() - lastGpsLogTime >= gpsUpdateInterval) { 
          lastGpsLogTime = millis();
          digitalWrite(LED_PIN, !digitalRead(LED_PIN)); 
          
+// ИЗМЕНЕНИЕ НАЧАЛО
+/*
+         // Очищаем базу от пропавших из эфира соседей
+         nodeDB.cleanup();
+*/
+// КОНЕЦ ИЗМЕНЕНИЯ
+
          String line1, line2, line3, line4;
          int sats = gps.satellites.value();
  
-         // Проверка таймаута связи
-         bool isRemoteValid = false;
-         if (lastRxTime == 0 || (millis() - lastRxTime > 30000)) {
-             // Логируем предупреждение ОДИН РАЗ за период таймаута
-             if (!isTimeoutLogged) {
-                 LOG_WARN("LORA", "Remote signal timeout (> 30s) or not established");
-                 isTimeoutLogged = true; // Блокируем повторный вывод до получения нового пакета
-             } // if (!isTimeoutLogged)
-         } else {
-             isRemoteValid = true;
-         } // if (timeout) else
- 
+         // Получаем указатель на последнего услышанного соседа
+         const NodeRecord* targetNode = nodeDB.getNode(lastTargetId);
+         bool isTargetValid = (targetNode != nullptr);
+
+         // Логируем потерю связи с конкретной целью, если нужно
+         if (!isTargetValid && lastTargetId != 0) {
+             LOG_WARN("LORA", "Target Node %d is offline or timed out.", lastTargetId);
+             lastTargetId = 0; // Сбрасываем цель
+         } // if target lost
+
          // Строка 1: Статус GPS
          if (!gps.location.isValid()) {
              line1 = (sats > 0) ? ("GPS Wait " + String(sats)) : "GPS ERROR";
          } else {
              line1 = "GPS OK " + String(sats);
+
+// ИЗМЕНЕНИЕ НАЧАЛО
+/*
+*/
+             // Регистрируем СЕБЯ в базе данных для унификации доступа к данным
+             nodeDB.updateNodeCoords(myNodeId, gps.location.lat(), gps.location.lng());
+// КОНЕЦ ИЗМЕНЕНИЯ
              
              // ОДНОКРАТНАЯ ИНИЦИАЛИЗАЦИЯ МАСШТАБА ДОЛГОТЫ
              if (!isLonScaleSet) {
@@ -437,24 +466,33 @@
                       gps.location.lat(), gps.location.lng(), gps.altitude.meters(), 
                       gps.hdop.hdop(), (int)(gps.hdop.hdop() * 2.5));
 
-             if (isRemoteValid) {
-                 dist = TinyGPSPlus::distanceBetween(gps.location.lat(), gps.location.lng(), remoteLat, remoteLon);
-                 azmt = TinyGPSPlus::courseTo(gps.location.lat(), gps.location.lng(), remoteLat, remoteLon);
-             } // if (isRemoteValid)
+             // Если цель валидна, считаем дистанцию
+             if (isTargetValid) {
+                 dist = TinyGPSPlus::distanceBetween(gps.location.lat(), gps.location.lng(), targetNode->lat, targetNode->lon);
+                 azmt = TinyGPSPlus::courseTo(gps.location.lat(), gps.location.lng(), targetNode->lat, targetNode->lon);
+             } // if (isTargetValid)
          } // if (!isValid) else
  
          // Строка 2: Наш ID и счетчик сообщений
          line2 = "My: " + String(myNodeId) + "-" + String(myMsgSeq);
          
-         // Строка 3: ID и счетчик удаленного узла
-         if (isRemoteValid) {
-             line3 = "Rx: " + String(lastRxNodeId) + "-" + String(lastRxSeq);
-             // Строка 4: Дистанция / Азимут / Качество связи
-             line4 = String((int)dist) + "m / " + String((int)azmt) + " / " + String(getConnectionQuality());
+// ИЗМЕНЕНИЕ НАЧАЛО
+/*
+         // Строка 3: Количество соседей в сети
+         line3 = "Nodes: " + String(nodeDB.getActiveNodesCount());
+*/
+         // Строка 3: Количество соседей (все в базе минус мы сами)
+         uint8_t totalNodes = nodeDB.getActiveNodesCount();
+         uint8_t neighbors = (totalNodes > 0) ? (totalNodes - 1) : 0;
+         line3 = "Neighbors: " + String(neighbors);
+// КОНЕЦ ИЗМЕНЕНИЯ
+         
+         // Строка 4: Дистанция / Азимут / Качество связи до последнего услышанного
+         if (isTargetValid) {
+             line4 = String(targetNode->nodeId) + ": " + String((int)dist) + "m/" + String((int)azmt) + "/" + String(getConnectionQuality(targetNode->nodeId));
          } else {
-             line3 = "Rx: ---";
-             line4 = "??? / ??? / 0";
-         } // if (isRemoteValid) else
+             line4 = "No targets";
+         } // if (isTargetValid) else
 
          showStatus(line1, line2, line3, line4);
      } // if displayInterval
