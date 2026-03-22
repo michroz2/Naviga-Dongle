@@ -1,7 +1,7 @@
 /**
  * Project: Naviga-Dongle (T-Beam v1.1 Custom E22 + Universal GPS)
  * File: main.cpp
- * Version: 1.2.3
+ * Version: 1.2.7
  * Description: Система логирования GPS координат, умная инициализация GPS
  * и обмен данными через LoRa (SX1268). Основной файл программы.
  */
@@ -20,12 +20,9 @@
  #include "NodeDatabase.h"     
  #include "Retranslation.h"    
 
- // Шаг 1.2: Динамический ID устройства (1-254)
  uint8_t myNodeId = 0; 
- // Глобальный счетчик отправленных сообщений узла
  uint8_t myMsgSeq = 0;
 
- // --- ОБЪЕКТЫ УПРАВЛЕНИЯ ПЕРИФЕРИЕЙ ---
  XPowersAXP2101 pmu;                                    
  SSD1306Wire display(0x3c, I2C_SDA, I2C_SCL);           
  TinyGPSPlus gps;                                       
@@ -34,10 +31,8 @@
  NodeDatabase nodeDB;                                   
  Retranslation router;                                  
  
- // Инициализация радиомодуля SX1268
  SX1268 radio = new Module(LORA_CS, LORA_DIO1, LORA_RST, LORA_BUSY);
  
- // --- ПЕРЕМЕННЫЕ И ОБРАБОТЧИКИ ПРЕРЫВАНИЙ ---
  volatile bool receivedFlag = false;                    
 
  #if defined(ESP8266) || defined(ESP32)
@@ -45,21 +40,17 @@
  #endif
  void setFlag(void) {
      receivedFlag = true;
- } // setFlag()
+ }
 
- // Глобальные переменные навигационных данных
  float dist = 0.0;                                      
  float azmt = 0.0;                                      
  float lastSNR = 0.0;                                   
  uint8_t lastTargetId = 0;                              
 
- // --- ТАЙМЕРЫ И ФЛАГИ СОСТОЯНИЙ ---
  uint32_t lastTxTime = 0;                               
  uint32_t lastGpsLogTime = 0;                           
  uint32_t lastCleanupTime = 0;                          
  bool isLonScaleSet = false;                            
-
- // --- ФУНКЦИИ ИНТЕРФЕЙСА ---
 
  int getConnectionQuality(uint8_t targetId) {
      const NodeRecord* target = nodeDB.getNode(targetId);
@@ -70,7 +61,7 @@
      if (q < 1) q = 1;
      if (q > 10) q = 10;
      return q;
- } // getConnectionQuality()
+ } 
 
  void showStatus(String line1, String line2, String line3, String line4) {
      display.clear();
@@ -80,7 +71,7 @@
      display.drawString(0, 32, line3);
      display.drawString(0, 48, line4);
      display.display();
- } // showStatus()
+ } 
 
  void showLogo() {
      display.clear();
@@ -90,7 +81,7 @@
      display.drawString(0, 44, "Please Wait");
      display.display();
      delay(2000);
- } // showLogo()
+ } 
 
  // --- GPS И LORA INIT (Свернуты для читаемости) ---
  const uint32_t baudRates[] = {9600, 115200, 38400, 57600, 19200, 4800};
@@ -148,7 +139,7 @@
          else { originalBaud = 0; }
          GPS_Serial.begin(9600, SERIAL_8N1, GPS_RX, GPS_TX);
      }
- } // initGPS()
+ } 
 
  void initLoRa() {
      showStatus("System Init...", "GPS Init Done", "Init LoRa...", "");
@@ -171,10 +162,9 @@
          showStatus("ERROR", "LoRa Init Failed", "Check Logs", "");
          delay(3000);
      }
- } // initLoRa()
+ } 
 
-// --- ДИСПЕТЧЕР СООБЩЕНИЙ (Локальная обработка полезной нагрузки) ---
-
+// --- ДИСПЕТЧЕР СООБЩЕНИЙ (Локальная обработка) ---
 void handleCoordsPacket(uint8_t senderId, const uint8_t* payload) {
     if (!gps.location.isValid()) {
         LOG_WARN("DISPATCH", "Skip COORDS unpack: local GPS not valid");
@@ -188,21 +178,21 @@ void handleCoordsPacket(uint8_t senderId, const uint8_t* payload) {
     nodeDB.updateNodeCoords(senderId, unpLat, unpLon);
     lastTargetId = senderId; 
     LOG_INFO("DISPATCH", "Extracted COORDS: Node %d -> Lat: %.6f, Lon: %.6f", senderId, unpLat, unpLon);
-} // handleCoordsPacket()
+}
 
 void handleNodeInfoPacket(uint8_t senderId, const uint8_t* payload) {
     PayloadNodeInfo info;
     memcpy(&info, payload, sizeof(PayloadNodeInfo));
     nodeDB.updateNodeName(senderId, info.nodeName);
     LOG_INFO("DISPATCH", "Updated Name: Node %d -> %s", senderId, info.nodeName);
-} // handleNodeInfoPacket()
+} 
 
 void handleLeavePacket(uint8_t senderId, const uint8_t* payload) {
     PayloadLeave info;
-    memcpy(&info, payload, sizeof(PayloadLeave)); // Распаковываем 1 байт
+    memcpy(&info, payload, sizeof(PayloadLeave)); 
     nodeDB.removeNode(senderId);
     LOG_INFO("DISPATCH", "Node %d left the network. Reason code: %d", senderId, info.reason);
-} // handleLeavePacket()
+} 
 
 void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
     switch(header.getType()) {
@@ -213,14 +203,13 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
             handleNodeInfoPacket(header.senderId, payload);
             break;
         case MSG_LEAVE:
-            // Теперь передаем payload в функцию
             handleLeavePacket(header.senderId, payload);
             break;
         default:
             LOG_WARN("DISPATCH", "Unknown packet type %d passed customs?!", header.getType());
             break;
-    } // switch
-} // processIncomingPacket()
+    } 
+} 
 
  // --- ФУНКЦИЯ ПЕРЕДАЧИ КООРДИНАТ ---
  void sendLocation() {
@@ -246,7 +235,7 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
      radio.transmit(txBuffer, 8); 
      receivedFlag = false;
      radio.startReceive();
- } // sendLocation()
+ } 
  
  void setup() {
      delay(500); 
@@ -273,7 +262,7 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
      randomSeed(esp_random());
      myNodeId = random(1, 255);
      LOG_INFO("SYS", "Generated Node ID: %d", myNodeId);
- } // setup()
+ } 
  
  void loop() {
      // 1. ЧТЕНИЕ GPS
@@ -292,24 +281,27 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
              if (state == RADIOLIB_ERR_NONE) {
                  lastSNR = radio.getSNR();
                  
-                 // Проверка на минимально возможный размер пакета (только заголовок)
                  if (len >= sizeof(NavigaHeader)) {
                      NavigaHeader rxHeader;
                      memcpy(&rxHeader, rxBuffer, sizeof(NavigaHeader));
-                     
                      size_t payloadLen = len - sizeof(NavigaHeader);
                      
                      // 1. Свое собственное эхо игнорируем
                      if (rxHeader.senderId == myNodeId) {
                          LOG_WARN("LORA", "Received our own packet. Ignored.");
                      } 
-                     // 2. Валидация пакета по справочнику (Таможня: проверка типа и длины)
+                     // 2. Валидация пакета по справочнику
                      else if (!router.isValidPacket(rxHeader.getType(), payloadLen)) {
                          LOG_WARN("LORA", "Invalid packet format/size! Type: %d, Len: %d", rxHeader.getType(), payloadLen);
                      }
-                     // 3. Проверка на дубликаты (Таможня: кольцевой буфер)
+                     // 3. Проверка на дубликаты
                      else if (router.isDuplicate(rxHeader.senderId, rxHeader.msgSeq)) {
                          LOG_WARN("LORA", "Duplicate pkt Node %d Seq %d dropped.", rxHeader.senderId, rxHeader.msgSeq);
+                         
+                         // Задел на будущее: проверка, нужно ли удалить пакет из очереди ретрансляции
+                         if (router.shouldAbortRelay(rxHeader.senderId, rxHeader.msgSeq)) {
+                             router.abortRelay(rxHeader.senderId, rxHeader.msgSeq);
+                         }
                      }
                      // 4. Пакет прошел таможню: обрабатываем локально!
                      else {
@@ -319,30 +311,53 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
                          // Передаем полезную нагрузку в диспетчер
                          processIncomingPacket(rxHeader, rxBuffer + sizeof(NavigaHeader));
                          
-                         // 5. Оценка возможности ретрансляции
+                         // 5. Оценка возможности ретрансляции и постановка в очередь
                          if (router.shouldRetransmit(rxHeader)) {
-                             LOG_INFO("LORA", "Packet approved for relay queue (TTL > 1).");
-                             // TODO: Логика добавления в очередь отправки для Шага 2.3
+                             // Передаем SNR для расчета умной задержки
+                             router.enqueuePacket(rxHeader, rxBuffer + sizeof(NavigaHeader), payloadLen, lastSNR);
                          } else {
                              LOG_INFO("LORA", "Packet reached max hops (TTL <= 1). No relay.");
                          }
-                     } // if custom checks passed
+                     } 
                  } else {
                      LOG_WARN("LORA", "Packet too short! Length: %d", len);
-                 } // if len >= header
+                 } 
              } else if (state == RADIOLIB_ERR_CRC_MISMATCH) {
                  LOG_WARN("LORA", "CRC Error!");
-             } // if state
-         } // if len > 0
+             } 
+         } 
          radio.startReceive();
-     } // if receivedFlag
+     } 
 
-     // 3. ПЕРЕДАЧА LORA
+     // 3. ПЕРЕДАЧА LORA (Собственные координаты)
      if (millis() - lastTxTime >= txInterval) {
          if (!receivedFlag) { sendLocation(); lastTxTime = millis(); } 
      } 
 
-     // 3.1. ПЕРИОДИЧЕСКАЯ ОЧИСТКА БАЗЫ (Раз в 5 минут)
+     // 3.1. РЕТРАНСЛЯЦИЯ ПАКЕТОВ ИЗ ОЧЕРЕДИ
+     NavigaHeader relayHeader;
+     uint8_t relayPayload[MAX_PAYLOAD_SIZE];
+     size_t relayPayloadLen;
+     
+     // Если эфир свободен и пришло время передавать чужой пакет
+     if (!receivedFlag && router.getReadyPacket(myNodeId, relayHeader, relayPayload, relayPayloadLen)) {
+         uint8_t txBuffer[sizeof(NavigaHeader) + MAX_PAYLOAD_SIZE];
+         size_t totalLen = sizeof(NavigaHeader) + relayPayloadLen;
+         
+         // Собираем модифицированный пакет обратно
+         memcpy(txBuffer, &relayHeader, sizeof(NavigaHeader));
+         memcpy(txBuffer + sizeof(NavigaHeader), relayPayload, relayPayloadLen);
+         
+         LOG_INFO("RELAY", "Transmitting pkt Seq %d from Node %d. New TTL: %d", 
+                  relayHeader.msgSeq, relayHeader.senderId, relayHeader.getTTL());
+         
+         radio.standby();
+         radio.transmit(txBuffer, totalLen); 
+         receivedFlag = false;
+         radio.startReceive();
+     }
+
+     // 3.2. ПЕРИОДИЧЕСКАЯ ОЧИСТКА БАЗЫ (Раз в 5 минут)
      if (millis() - lastCleanupTime >= NODE_TIMEOUT_MS) {
          lastCleanupTime = millis();
          nodeDB.cleanup();
