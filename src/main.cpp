@@ -1,14 +1,13 @@
 /**
  * Project: Naviga-Dongle (T-Beam v1.1 Custom E22 + Universal GPS)
  * File: main.cpp
- * Version: 1.3.2
- * Description: Рефакторинг. Выделение логики экрана в отдельный класс DisplayManager.
+ * Version: 1.3.3
+ * Description: Рефакторинг. Выделение логики LoRa в отдельный класс RadioManager.
  */
 
  #include <Arduino.h>
  #include <Wire.h>
  #include <SPI.h>              
- #include <RadioLib.h>         
  #include <XPowersLib.h>       
  #include "configuration.h"
  #include "logger.h"           
@@ -17,7 +16,8 @@
  #include "NodeDatabase.h"     
  #include "Retranslation.h"    
  #include "GpsManager.h"       
- #include "DisplayManager.h"   // НОВОЕ: Подключаем наш менеджер экрана
+ #include "DisplayManager.h"   
+ #include "RadioManager.h"     // НОВОЕ: Подключаем наш менеджер радио
 
  // --- НАСТРОЙКИ СКАНИРОВАНИЯ ---
  uint32_t networkScanDuration = 30000; 
@@ -27,13 +27,12 @@
  uint8_t myMsgSeq = 0;
 
  XPowersAXP2101 pmu;                                    
- DisplayManager display(0x3c, I2C_SDA, I2C_SCL); // НОВОЕ: Наш умный объект экрана
+ DisplayManager display(0x3c, I2C_SDA, I2C_SCL); 
  GpsManager gps;                                       
+ RadioManager radio; // НОВОЕ: Наш умный радиомодуль (название сохранено для совместимости)
  GeoPacker packer;                                      
  NodeDatabase nodeDB;                                   
  Retranslation router;                                  
- 
- SX1268 radio = new Module(LORA_CS, LORA_DIO1, LORA_RST, LORA_BUSY);
  
  volatile bool receivedFlag = false;                    
 
@@ -65,42 +64,16 @@
      return q;
  } 
 
- // НОВОЕ: Функция-посредник (коллбэк) для передачи в GpsManager
  void updateScreenCb(String line1, String line2, String line3, String line4) {
      display.showStatus(line1, line2, line3, line4);
  }
 
- // Коллбэк для сброса питания GPS через PMU
  void cycleGpsPower() {
      pmu.disableALDO3(); 
      delay(2000); 
      pmu.enableALDO3(); 
      delay(2000); 
  }
-
- // --- LORA INIT ---
- void initLoRa() {
-     display.showStatus("System Init...", "GPS Init Done", "Init LoRa...", "");
-     int state = radio.begin(433.0);        
-     if (state == RADIOLIB_ERR_NONE) {
-         radio.setDio2AsRfSwitch(false);    
-         radio.setBandwidth(125.0);         
-         radio.setSpreadingFactor(9);       
-         radio.setCodingRate(5);            
-         radio.setSyncWord(0x2B);           
-         radio.setPreambleLength(16);       
-         radio.setOutputPower(22);          
-         radio.setCurrentLimit(140);        
-         radio.setTCXO(1.8);
-         radio.setRfSwitchPins(LORA_RXEN, LORA_TXEN);
-         radio.setRxBoostedGainMode(true);
-         radio.setPacketReceivedAction(setFlag);
-         radio.startReceive();
-     } else {
-         display.showStatus("ERROR", "LoRa Init Failed", "Check Logs", "");
-         delay(3000);
-     }
- } 
 
 // --- ДИСПЕТЧЕР СООБЩЕНИЙ ---
 void handleCoordsPacket(uint8_t senderId, const uint8_t* payload) {
@@ -296,11 +269,17 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
          pmu.disableALDO4(); pmu.enableSystemVoltageMeasure();  
      }
      
-     display.init(); // НОВОЕ: Инициализация через класс
+     display.init(); 
      display.showLogo();
      
-     gps.init(updateScreenCb, cycleGpsPower); // Передаем посредника
-     initLoRa();
+     gps.init(updateScreenCb, cycleGpsPower); 
+     
+     // НОВОЕ: Элегантный старт LoRa
+     display.showStatus("System Init...", "GPS Init Done", "Init LoRa...", "");
+     if (!radio.init(setFlag)) {
+         display.showStatus("ERROR", "LoRa Init Failed", "Check Logs", "");
+         delay(3000);
+     }
 
      scanNetworkForUniqueId();
  } 
@@ -458,6 +437,6 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
              line4 = "No targets";
          } 
 
-         display.showStatus(line1, line2, line3, line4); // Вывод через менеджер
+         display.showStatus(line1, line2, line3, line4); 
      } // if displayInterval
  } // loop()
