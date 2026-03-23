@@ -1,8 +1,9 @@
 /**
  * Project: Naviga-Dongle (T-Beam v1.1 Custom E22 + Universal GPS)
  * File: main.cpp
- * Version: 1.3.4
- * Description: Рефакторинг. Выделение логики питания (AXP2101) в класс PowerManager.
+ * Version: 1.3.6
+ * Description: Внедрена система индивидуального мониторинга качества связи (SNR). 
+ * Настроена шкала качества под физику модуляции LoRa SF9.
  */
 
  #include <Arduino.h>
@@ -17,7 +18,8 @@
  #include "GpsManager.h"       
  #include "DisplayManager.h"   
  #include "RadioManager.h"     
- #include "PowerManager.h"     // НОВОЕ: Наш менеджер питания
+ #include "PowerManager.h"     
+ #include "PacketManager.h"    
 
  // --- НАСТРОЙКИ СКАНИРОВАНИЯ ---
  uint32_t networkScanDuration = 30000; 
@@ -26,14 +28,15 @@
  uint8_t myNodeId = 0; 
  uint8_t myMsgSeq = 0;
 
- PowerManager power;           // НОВОЕ: Экземпляр менеджера питания                           
+ PowerManager power;                                      
  DisplayManager display(0x3c, I2C_SDA, I2C_SCL); 
  GpsManager gps;                                       
  RadioManager radio; 
  GeoPacker packer;                                      
  NodeDatabase nodeDB;                                   
  Retranslation router;                                  
- 
+ PacketManager packetManager(nodeDB, gps, packer);
+
  volatile bool receivedFlag = false;                    
 
  #if defined(ESP8266) || defined(ESP32)
@@ -45,20 +48,26 @@
 
  float dist = 0.0;                                      
  float azmt = 0.0;                                      
- float lastSNR = 0.0;                                   
- uint8_t lastTargetId = 0;                              
+ // Глобальная lastSNR удалена! Качество теперь привязано к узлу.
 
  uint32_t lastTxTime = 0;                               
  uint32_t lastGpsLogTime = 0;                           
  uint32_t lastCleanupTime = 0;                          
  bool isLonScaleSet = false;                            
 
+ // Умный расчет качества связи для дисплея
  int getConnectionQuality(uint8_t targetId) {
+     if (targetId == myNodeId) return 10; // Для себя всегда максимум (+100)
+
      const NodeRecord* target = nodeDB.getNode(targetId);
      if (target == nullptr || targetId == 0) return 0;
      if (millis() - target->lastSeen > 30000) return 0;
+     
+     // Если прямых пакетов от узла не было, показываем 0
+     if (target->snr <= -99.0f) return 0; 
 
-     int q = map((long)lastSNR, -20, 5, 1, 10);
+     // Шкала качества, откалиброванная под предел демодуляции SF9 (-11 dB)
+     int q = map((long)target->snr, -11, 5, 1, 10);
      if (q < 1) q = 1;
      if (q > 10) q = 10;
      return q;
@@ -68,60 +77,9 @@
      display.showStatus(line1, line2, line3, line4);
  }
 
- // НОВОЕ: Функция-обертка для передачи в GpsManager
  void cycleGpsPowerCb() {
      power.cycleGpsPower();
  }
-
-// --- ДИСПЕТЧЕР СООБЩЕНИЙ ---
-void handleCoordsPacket(uint8_t senderId, const uint8_t* payload) {
-    uint32_t packedCoords;
-    memcpy(&packedCoords, payload, sizeof(PayloadCoords));
-
-    if (!gps.isValid()) {
-        LOG_WARN("DISPATCH", "No GPS fix. Saved RAW coords for Node %d", senderId);
-        nodeDB.updateNodeCoords(senderId, 0.0f, 0.0f, packedCoords);
-        lastTargetId = senderId; 
-        return;
-    }
-
-    float unpLat, unpLon;
-    packer.unpack(packedCoords, gps.getLat(), gps.getLon(), unpLat, unpLon);
-    
-    nodeDB.updateNodeCoords(senderId, unpLat, unpLon, packedCoords);
-    lastTargetId = senderId; 
-    LOG_INFO("DISPATCH", "Extracted COORDS: Node %d -> Lat: %.6f, Lon: %.6f", senderId, unpLat, unpLon);
-}
-
-void handleNodeInfoPacket(uint8_t senderId, const uint8_t* payload) {
-    PayloadNodeInfo info;
-    memcpy(&info, payload, sizeof(PayloadNodeInfo));
-    nodeDB.updateNodeName(senderId, info.nodeName);
-    LOG_INFO("DISPATCH", "Updated Name: Node %d -> %s", senderId, info.nodeName);
-} 
-
-void handleLeavePacket(uint8_t senderId, const uint8_t* payload) {
-    PayloadLeave info;
-    memcpy(&info, payload, sizeof(PayloadLeave)); 
-    nodeDB.removeNode(senderId);
-    LOG_INFO("DISPATCH", "Node %d left the network. Reason code: %d", senderId, info.reason);
-} 
-
-void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
-    switch(header.getType()) {
-        case MSG_COORDS:
-            handleCoordsPacket(header.senderId, payload);
-            break;
-        case MSG_NODE_INFO:
-            handleNodeInfoPacket(header.senderId, payload);
-            break;
-        case MSG_LEAVE:
-            handleLeavePacket(header.senderId, payload);
-            break;
-        default:
-            break;
-    } 
-} 
 
  // --- ФУНКЦИЯ ПЕРЕДАЧИ КООРДИНАТ ---
  void sendLocation() {
@@ -223,7 +181,7 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
                      
                      if (router.isValidPacket(rxHeader.getType(), payloadLen)) {
                          if (!router.isDuplicate(rxHeader.senderId, rxHeader.msgSeq)) {
-                             processIncomingPacket(rxHeader, rxBuffer + sizeof(NavigaHeader));
+                             packetManager.processPacket(rxHeader, rxBuffer + sizeof(NavigaHeader));
                          }
                      }
                  }
@@ -261,12 +219,9 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
      Wire.begin(I2C_SDA, I2C_SCL);                       
      SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS); 
      
-     // НОВОЕ: Инициализация питания через менеджер
      power.init();
-     
      display.init(); 
      display.showLogo();
-     
      gps.init(updateScreenCb, cycleGpsPowerCb); 
      
      display.showStatus("System Init...", "GPS Init Done", "Init LoRa...", "");
@@ -291,7 +246,9 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
              uint8_t rxBuffer[256];             
              int state = radio.readData(rxBuffer, len); 
              if (state == RADIOLIB_ERR_NONE) {
-                 lastSNR = radio.getSNR();
+                 
+                 // Захватываем качество сигнала сразу после чтения буфера
+                 float currentSNR = radio.getSNR();
                  
                  if (len >= sizeof(NavigaHeader)) {
                      NavigaHeader rxHeader;
@@ -320,6 +277,13 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
                          handleCollision();
                      }
 
+                     // Обновляем SNR для ретранслятора. Делаем это ПОСЛЕ обработки коллизии,
+                     // чтобы если это был прямой двойник (relayId == старый myNodeId),
+                     // мы записали реальный SNR в освободившийся слот!
+                     if (rxHeader.relayId != myNodeId) {
+                         nodeDB.updateNodeSNR(rxHeader.relayId, currentSNR);
+                     }
+
                      if (isOwnEcho) {
                          // do nothing
                      } 
@@ -333,12 +297,13 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
                          }
                      }
                      else {
-                         LOG_INFO("LORA", "Valid pkt Type %d from Node %d (Relay: %d, Seq: %d, TTL: %d)", 
-                                  rxHeader.getType(), rxHeader.senderId, rxHeader.relayId, rxHeader.msgSeq, rxHeader.getTTL());
-                         processIncomingPacket(rxHeader, rxBuffer + sizeof(NavigaHeader));
+                         LOG_INFO("LORA", "Valid pkt Type %d from Node %d (Relay: %d, Seq: %d, SNR: %.1f)", 
+                                  rxHeader.getType(), rxHeader.senderId, rxHeader.relayId, rxHeader.msgSeq, currentSNR);
+                         
+                         packetManager.processPacket(rxHeader, rxBuffer + sizeof(NavigaHeader));
                          
                          if (router.shouldRetransmit(rxHeader)) {
-                             router.enqueuePacket(rxHeader, rxBuffer + sizeof(NavigaHeader), payloadLen, lastSNR);
+                             router.enqueuePacket(rxHeader, rxBuffer + sizeof(NavigaHeader), payloadLen, currentSNR);
                          } 
                      } 
                  } 
@@ -387,10 +352,13 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
          String line1, line2, line3, line4;
          int sats = gps.getSatellites();
  
-         const NodeRecord* targetNode = nodeDB.getNode(lastTargetId);
+         uint8_t currentTargetId = packetManager.getLastTargetId();
+         const NodeRecord* targetNode = nodeDB.getNode(currentTargetId);
          bool isTargetValid = (targetNode != nullptr);
 
-         if (!isTargetValid && lastTargetId != 0) lastTargetId = 0; 
+         if (!isTargetValid && currentTargetId != 0) {
+             packetManager.clearLastTargetId();
+         } 
 
          if (!gps.isValid()) {
              line1 = (sats > 0) ? ("GPS Wait " + String(sats)) : "GPS ERROR";
