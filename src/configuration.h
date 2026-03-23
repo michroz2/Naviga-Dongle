@@ -54,7 +54,7 @@
 #define GPS_TX      12  // Линия передачи команд в GPS-модуль
 
 // --- НАСТРОЙКИ ПЕРИОДИЧНОСТИ ---
-uint32_t txInterval = 15000;       // Заданный интервал передачи координат в эфир (в миллисекундах)
-uint32_t gpsUpdateInterval = 1000; // Заданный интервал обновления и вывода GPS данных (в миллисекундах)
+const uint32_t txInterval = 10000;
+const uint32_t gpsUpdateInterval = 1000;
 
 #endif // CONFIGURATION_H

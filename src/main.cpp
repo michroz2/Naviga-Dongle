@@ -1,10 +1,8 @@
 /**
  * Project: Naviga-Dongle (T-Beam v1.1 Custom E22 + Universal GPS)
  * File: main.cpp
- * Version: 1.3.0
- * Description: Внедрен Шаг 3.2 и 3.3. Интеллектуальный детектор коллизий. 
- * При обнаружении прямого или ретранслированного двойника узел меняет свой ID, 
- * отправляет MSG_NODE_INFO и уступает старый слот в базе данных двойнику.
+ * Version: 1.3.1
+ * Description: Рефакторинг. Выделение логики GPS в отдельный класс GpsManager.
  */
 
  #include <Arduino.h>
@@ -12,7 +10,6 @@
  #include <SPI.h>              
  #include <RadioLib.h>         
  #include <XPowersLib.h>       
- #include <TinyGPS++.h>
  #include "SSD1306Wire.h"
  #include "configuration.h"
  #include "logger.h"           
@@ -20,18 +17,18 @@
  #include "NavigaProtocol.h"
  #include "NodeDatabase.h"     
  #include "Retranslation.h"    
+ #include "GpsManager.h"       // НОВОЕ: Подключаем наш менеджер
 
  // --- НАСТРОЙКИ СКАНИРОВАНИЯ ---
- uint32_t networkScanDuration = 30000; // 30 секунд (в будущем перенесем в EEPROM)
- #define RED_LED_PIN 4                 // Пин красного светодиода T-Beam (управляется LOW)
+ uint32_t networkScanDuration = 30000; 
+ #define RED_LED_PIN 4                 
 
  uint8_t myNodeId = 0; 
  uint8_t myMsgSeq = 0;
 
  XPowersAXP2101 pmu;                                    
  SSD1306Wire display(0x3c, I2C_SDA, I2C_SCL);           
- TinyGPSPlus gps;                                       
- HardwareSerial GPS_Serial(1);                          
+ GpsManager gps;                 // НОВОЕ: Наш умный GPS-объект                      
  GeoPacker packer;                                      
  NodeDatabase nodeDB;                                   
  Retranslation router;                                  
@@ -88,64 +85,15 @@
      delay(2000);
  } 
 
- // --- GPS И LORA INIT (Свернуты для читаемости) ---
- const uint32_t baudRates[] = {9600, 115200, 38400, 57600, 19200, 4800};
- const int numBauds = sizeof(baudRates) / sizeof(baudRates[0]);
- uint32_t originalBaud = 0;
- const uint8_t UBX_FACTORY_RESET[] = { 0xB5, 0x62, 0x06, 0x09, 0x0D, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0x03, 0x1B, 0x9A };
-
- bool checkNMEA(uint32_t baud) {
-     GPS_Serial.begin(baud, SERIAL_8N1, GPS_RX, GPS_TX);
-     unsigned long start = millis();
-     char prevChar = 0;
-     while (millis() - start < 1500) {
-         if (GPS_Serial.available()) {
-             char c = GPS_Serial.read();
-             if (prevChar == '$' && (c == 'G' || c == 'P')) return true;
-             prevChar = c;
-         }
-     }
-     return false;
+ // НОВОЕ: Коллбэк для сброса питания GPS через PMU
+ void cycleGpsPower() {
+     pmu.disableALDO3(); 
+     delay(2000); 
+     pmu.enableALDO3(); 
+     delay(2000); 
  }
 
- void initGPS() {
-     showStatus("Init GPS...", "Searching module", "Wait...", "");
-     bool nmeaFound = false;
-     uint32_t activeBaud = 0;
-     for (int i = 0; i < numBauds; i++) {
-         if (checkNMEA(baudRates[i])) {
-             activeBaud = baudRates[i];
-             originalBaud = activeBaud; 
-             nmeaFound = true;
-             break;
-         }
-     }
-     if (nmeaFound) {
-         if (activeBaud == 9600) return; 
-         else {
-             showStatus("Init GPS...", "Switching Baud", String(activeBaud) + " -> 9600", "");
-             GPS_Serial.print("$PUBX,41,1,0007,0003,9600,0*10\r\n");
-             GPS_Serial.flush();
-             delay(500); 
-             if (checkNMEA(9600)) return; 
-             else nmeaFound = false;
-         }
-     }
-     if (!nmeaFound) {
-         showStatus("Init GPS...", "Rescue Mode!", "Wait 10 sec...", "");
-         for (int i = 0; i < numBauds; i++) {
-             GPS_Serial.begin(baudRates[i], SERIAL_8N1, GPS_RX, GPS_TX);
-             delay(50);
-             for(int j = 0; j < 3; j++) { GPS_Serial.write(UBX_FACTORY_RESET, sizeof(UBX_FACTORY_RESET)); GPS_Serial.flush(); delay(50); }
-         }
-         pmu.disableALDO3(); delay(2000); pmu.enableALDO3(); delay(2000); 
-         if (checkNMEA(115200)) { originalBaud = 115200; GPS_Serial.print("$PUBX,41,1,0007,0003,9600,0*10\r\n"); GPS_Serial.flush(); delay(500); } 
-         else if (checkNMEA(9600)) { originalBaud = 9600; } 
-         else { originalBaud = 0; }
-         GPS_Serial.begin(9600, SERIAL_8N1, GPS_RX, GPS_TX);
-     }
- } 
-
+ // --- LORA INIT ---
  void initLoRa() {
      showStatus("System Init...", "GPS Init Done", "Init LoRa...", "");
      int state = radio.begin(433.0);        
@@ -174,7 +122,7 @@ void handleCoordsPacket(uint8_t senderId, const uint8_t* payload) {
     uint32_t packedCoords;
     memcpy(&packedCoords, payload, sizeof(PayloadCoords));
 
-    if (!gps.location.isValid()) {
+    if (!gps.isValid()) {
         LOG_WARN("DISPATCH", "No GPS fix. Saved RAW coords for Node %d", senderId);
         nodeDB.updateNodeCoords(senderId, 0.0f, 0.0f, packedCoords);
         lastTargetId = senderId; 
@@ -182,7 +130,7 @@ void handleCoordsPacket(uint8_t senderId, const uint8_t* payload) {
     }
 
     float unpLat, unpLon;
-    packer.unpack(packedCoords, gps.location.lat(), gps.location.lng(), unpLat, unpLon);
+    packer.unpack(packedCoords, gps.getLat(), gps.getLon(), unpLat, unpLon);
     
     nodeDB.updateNodeCoords(senderId, unpLat, unpLon, packedCoords);
     lastTargetId = senderId; 
@@ -221,11 +169,11 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
 
  // --- ФУНКЦИЯ ПЕРЕДАЧИ КООРДИНАТ ---
  void sendLocation() {
-     if (!gps.location.isValid()) {
+     if (!gps.isValid()) {
          LOG_WARN("TX", "Skip TX: GPS location not valid.");
          return;
      } 
-     uint32_t packedCoords = packer.pack(gps.location.lat(), gps.location.lng());
+     uint32_t packedCoords = packer.pack(gps.getLat(), gps.getLon());
      
      NavigaHeader txHeader;
      txHeader.senderId = myNodeId;
@@ -248,8 +196,7 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
  // --- ОБРАБОТКА КОЛЛИЗИИ (СМЕНА ID) ---
  void handleCollision() {
      uint8_t oldId = myNodeId;
-     
-     nodeDB.removeNode(oldId);
+     nodeDB.removeNode(oldId); // Стираем свои старые данные, чтобы отдать слот!
      
      randomSeed(esp_random());
      do {
@@ -260,8 +207,8 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
      
      myMsgSeq = 0; 
      
-     if (gps.location.isValid()) {
-         nodeDB.updateNodeCoords(myNodeId, gps.location.lat(), gps.location.lng(), 0, false);
+     if (gps.isValid()) {
+         nodeDB.updateNodeCoords(myNodeId, gps.getLat(), gps.getLon(), 0, false);
      }
      
      NavigaHeader infoHeader;
@@ -281,7 +228,6 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
      radio.standby();
      radio.transmit(txBuffer, sizeof(txBuffer));
      
-     // Ускоряем следующую отправку координат
      lastTxTime = millis() - txInterval + 2000; 
  }
 
@@ -329,9 +275,7 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
              radio.startReceive();
          }
          
-         while (GPS_Serial.available() > 0) {
-             gps.encode(GPS_Serial.read());
-         } 
+         gps.update(); // НОВОЕ: Элегантное обновление
      } 
      
      digitalWrite(RED_LED_PIN, HIGH); 
@@ -368,16 +312,17 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
      }
      display.init(); display.flipScreenVertically();
      showLogo();
-     initGPS(); initLoRa();
+     
+     // НОВОЕ: Передаем нашему GPS функции обратного вызова
+     gps.init(showStatus, cycleGpsPower); 
+     initLoRa();
 
      scanNetworkForUniqueId();
  } 
  
  void loop() {
-     // 1. ЧТЕНИЕ GPS
-     while (GPS_Serial.available() > 0) {
-         gps.encode(GPS_Serial.read());
-     } 
+     // 1. ЧТЕНИЕ GPS (Теперь просто и красиво)
+     gps.update();
 
      // 2. ОБРАБОТКА LORA ПРИЕМА
      if (receivedFlag) {
@@ -395,20 +340,15 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
                      memcpy(&rxHeader, rxBuffer, sizeof(NavigaHeader));
                      size_t payloadLen = len - sizeof(NavigaHeader);
                      
-                     // --- ДЕТЕКТОР КОЛЛИЗИЙ ---
                      bool isCollision = false;
                      bool isOwnEcho = false;
 
-                     // Тип 1: Кто-то прямо сейчас вещает, притворяясь нами
                      if (rxHeader.relayId == myNodeId) {
                          isCollision = true;
                          LOG_WARN("LORA", "Collision Type 1: Relay ID == myNodeId!");
                      } 
-                     // Тип 2: Кто-то сгенерировал пакет с нашим ID (или это наше эхо)
                      else if (rxHeader.senderId == myNodeId) {
                          int8_t seqDiff = (int8_t)(myMsgSeq - rxHeader.msgSeq);
-                         
-                         // Если пакет из будущего или слишком старый
                          if (seqDiff <= 0 || seqDiff > 10) {
                              isCollision = true;
                              LOG_WARN("LORA", "Collision Type 2: Seq %d vs my %d (diff: %d)", rxHeader.msgSeq, myMsgSeq, seqDiff);
@@ -419,32 +359,24 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
                      }
 
                      if (isCollision) {
-                         // Запускаем смену ID. Пакет двойника пройдет дальше и запишется в наш старый слот NodeDB!
                          handleCollision();
                      }
-                     // -------------------------
 
-                     // Если это легальное эхо - просто пропускаем дальнейшую обработку
                      if (isOwnEcho) {
                          // do nothing
                      } 
-                     // Валидация пакета по справочнику
                      else if (!router.isValidPacket(rxHeader.getType(), payloadLen)) {
                          LOG_WARN("LORA", "Invalid packet format/size! Type: %d, Len: %d", rxHeader.getType(), payloadLen);
                      }
-                     // Проверка на дубликаты
                      else if (router.isDuplicate(rxHeader.senderId, rxHeader.msgSeq)) {
                          LOG_WARN("LORA", "Duplicate pkt Node %d Seq %d dropped.", rxHeader.senderId, rxHeader.msgSeq);
-                         
                          if (router.shouldAbortRelay(rxHeader.senderId, rxHeader.msgSeq)) {
                              router.abortRelay(rxHeader.senderId, rxHeader.msgSeq);
                          }
                      }
-                     // Пакет прошел таможню: обрабатываем локально!
                      else {
                          LOG_INFO("LORA", "Valid pkt Type %d from Node %d (Relay: %d, Seq: %d, TTL: %d)", 
                                   rxHeader.getType(), rxHeader.senderId, rxHeader.relayId, rxHeader.msgSeq, rxHeader.getTTL());
-                         
                          processIncomingPacket(rxHeader, rxBuffer + sizeof(NavigaHeader));
                          
                          if (router.shouldRetransmit(rxHeader)) {
@@ -489,28 +421,28 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
          nodeDB.cleanup();
      } 
 
-     // 4. ОБНОВЛЕНИЕ ДИСПЛЕЯ И РЕТРОСПЕКТИВНАЯ РАСПАКОВКА
+     // 4. ОБНОВЛЕНИЕ ДИСПЛЕЯ
      if (millis() - lastGpsLogTime >= gpsUpdateInterval) { 
          lastGpsLogTime = millis();
          digitalWrite(LED_PIN, !digitalRead(LED_PIN)); 
          
          String line1, line2, line3, line4;
-         int sats = gps.satellites.value();
+         int sats = gps.getSatellites();
  
          const NodeRecord* targetNode = nodeDB.getNode(lastTargetId);
          bool isTargetValid = (targetNode != nullptr);
 
          if (!isTargetValid && lastTargetId != 0) lastTargetId = 0; 
 
-         if (!gps.location.isValid()) {
+         if (!gps.isValid()) {
              line1 = (sats > 0) ? ("GPS Wait " + String(sats)) : "GPS ERROR";
          } else {
              line1 = "GPS OK " + String(sats);
 
-             nodeDB.updateNodeCoords(myNodeId, gps.location.lat(), gps.location.lng(), 0, false);
+             nodeDB.updateNodeCoords(myNodeId, gps.getLat(), gps.getLon(), 0, false);
              
              if (!isLonScaleSet) {
-                 packer.updateLonScale(gps.location.lat());
+                 packer.updateLonScale(gps.getLat());
                  isLonScaleSet = true;
              } 
 
@@ -518,14 +450,14 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
                  const NodeRecord* node = nodeDB.getNode(i);
                  if (node != nullptr && node->packedCoords != 0 && node->lat == 0.0f && node->lon == 0.0f) {
                      float unpLat, unpLon;
-                     packer.unpack(node->packedCoords, gps.location.lat(), gps.location.lng(), unpLat, unpLon);
+                     packer.unpack(node->packedCoords, gps.getLat(), gps.getLon(), unpLat, unpLon);
                      nodeDB.updateNodeCoords(i, unpLat, unpLon, node->packedCoords, false);
                  }
              }
 
              if (isTargetValid) {
-                 dist = TinyGPSPlus::distanceBetween(gps.location.lat(), gps.location.lng(), targetNode->lat, targetNode->lon);
-                 azmt = TinyGPSPlus::courseTo(gps.location.lat(), gps.location.lng(), targetNode->lat, targetNode->lon);
+                 dist = gps.distanceTo(targetNode->lat, targetNode->lon);
+                 azmt = gps.courseTo(targetNode->lat, targetNode->lon);
              } 
          } 
  
