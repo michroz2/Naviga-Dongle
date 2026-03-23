@@ -1,8 +1,8 @@
 /**
  * Project: Naviga-Dongle (T-Beam v1.1 Custom E22 + Universal GPS)
  * File: main.cpp
- * Version: 1.3.1
- * Description: Рефакторинг. Выделение логики GPS в отдельный класс GpsManager.
+ * Version: 1.3.2
+ * Description: Рефакторинг. Выделение логики экрана в отдельный класс DisplayManager.
  */
 
  #include <Arduino.h>
@@ -10,14 +10,14 @@
  #include <SPI.h>              
  #include <RadioLib.h>         
  #include <XPowersLib.h>       
- #include "SSD1306Wire.h"
  #include "configuration.h"
  #include "logger.h"           
  #include "GeoPacker.h"        
  #include "NavigaProtocol.h"
  #include "NodeDatabase.h"     
  #include "Retranslation.h"    
- #include "GpsManager.h"       // НОВОЕ: Подключаем наш менеджер
+ #include "GpsManager.h"       
+ #include "DisplayManager.h"   // НОВОЕ: Подключаем наш менеджер экрана
 
  // --- НАСТРОЙКИ СКАНИРОВАНИЯ ---
  uint32_t networkScanDuration = 30000; 
@@ -27,8 +27,8 @@
  uint8_t myMsgSeq = 0;
 
  XPowersAXP2101 pmu;                                    
- SSD1306Wire display(0x3c, I2C_SDA, I2C_SCL);           
- GpsManager gps;                 // НОВОЕ: Наш умный GPS-объект                      
+ DisplayManager display(0x3c, I2C_SDA, I2C_SCL); // НОВОЕ: Наш умный объект экрана
+ GpsManager gps;                                       
  GeoPacker packer;                                      
  NodeDatabase nodeDB;                                   
  Retranslation router;                                  
@@ -65,27 +65,12 @@
      return q;
  } 
 
- void showStatus(String line1, String line2, String line3, String line4) {
-     display.clear();
-     display.setFont(ArialMT_Plain_16);
-     display.drawString(0, 0,  line1);
-     display.drawString(0, 16, line2);
-     display.drawString(0, 32, line3);
-     display.drawString(0, 48, line4);
-     display.display();
- } 
+ // НОВОЕ: Функция-посредник (коллбэк) для передачи в GpsManager
+ void updateScreenCb(String line1, String line2, String line3, String line4) {
+     display.showStatus(line1, line2, line3, line4);
+ }
 
- void showLogo() {
-     display.clear();
-     display.setFont(ArialMT_Plain_16);
-     display.drawString(0, 0,  "Naviga-Dongle");
-     display.drawString(0, 22, "System Init...");
-     display.drawString(0, 44, "Please Wait");
-     display.display();
-     delay(2000);
- } 
-
- // НОВОЕ: Коллбэк для сброса питания GPS через PMU
+ // Коллбэк для сброса питания GPS через PMU
  void cycleGpsPower() {
      pmu.disableALDO3(); 
      delay(2000); 
@@ -95,7 +80,7 @@
 
  // --- LORA INIT ---
  void initLoRa() {
-     showStatus("System Init...", "GPS Init Done", "Init LoRa...", "");
+     display.showStatus("System Init...", "GPS Init Done", "Init LoRa...", "");
      int state = radio.begin(433.0);        
      if (state == RADIOLIB_ERR_NONE) {
          radio.setDio2AsRfSwitch(false);    
@@ -112,7 +97,7 @@
          radio.setPacketReceivedAction(setFlag);
          radio.startReceive();
      } else {
-         showStatus("ERROR", "LoRa Init Failed", "Check Logs", "");
+         display.showStatus("ERROR", "LoRa Init Failed", "Check Logs", "");
          delay(3000);
      }
  } 
@@ -196,7 +181,7 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
  // --- ОБРАБОТКА КОЛЛИЗИИ (СМЕНА ID) ---
  void handleCollision() {
      uint8_t oldId = myNodeId;
-     nodeDB.removeNode(oldId); // Стираем свои старые данные, чтобы отдать слот!
+     nodeDB.removeNode(oldId); 
      
      randomSeed(esp_random());
      do {
@@ -250,7 +235,7 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
          if (now - lastDispUpdate >= 1000) {
              lastDispUpdate = now;
              uint32_t left = (networkScanDuration - (now - scanStart)) / 1000;
-             showStatus("Scanning Net...", "Time left: " + String(left) + " s", "Nodes Found: " + String(nodeDB.getActiveNodesCount()), "Please wait...");
+             display.showStatus("Scanning Net...", "Time left: " + String(left) + " s", "Nodes Found: " + String(nodeDB.getActiveNodesCount()), "Please wait...");
          }
          
          if (receivedFlag) {
@@ -275,7 +260,7 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
              radio.startReceive();
          }
          
-         gps.update(); // НОВОЕ: Элегантное обновление
+         gps.update(); 
      } 
      
      digitalWrite(RED_LED_PIN, HIGH); 
@@ -286,7 +271,7 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
      } while (nodeDB.getNode(myNodeId) != nullptr); 
      
      LOG_INFO("SYS", "Scan complete. Selected unique Node ID: %d", myNodeId);
-     showStatus("Scan Complete", "My new ID:", String(myNodeId), "Starting...");
+     display.showStatus("Scan Complete", "My new ID:", String(myNodeId), "Starting...");
      delay(2000);
      
      lastTxTime = millis(); 
@@ -310,18 +295,18 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
          pmu.setALDO3Voltage(3300); pmu.enableALDO3();
          pmu.disableALDO4(); pmu.enableSystemVoltageMeasure();  
      }
-     display.init(); display.flipScreenVertically();
-     showLogo();
      
-     // НОВОЕ: Передаем нашему GPS функции обратного вызова
-     gps.init(showStatus, cycleGpsPower); 
+     display.init(); // НОВОЕ: Инициализация через класс
+     display.showLogo();
+     
+     gps.init(updateScreenCb, cycleGpsPower); // Передаем посредника
      initLoRa();
 
      scanNetworkForUniqueId();
  } 
  
  void loop() {
-     // 1. ЧТЕНИЕ GPS (Теперь просто и красиво)
+     // 1. ЧТЕНИЕ GPS 
      gps.update();
 
      // 2. ОБРАБОТКА LORA ПРИЕМА
@@ -473,6 +458,6 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
              line4 = "No targets";
          } 
 
-         showStatus(line1, line2, line3, line4);
+         display.showStatus(line1, line2, line3, line4); // Вывод через менеджер
      } // if displayInterval
  } // loop()
