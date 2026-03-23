@@ -1,14 +1,13 @@
 /**
  * Project: Naviga-Dongle (T-Beam v1.1 Custom E22 + Universal GPS)
  * File: main.cpp
- * Version: 1.3.3
- * Description: Рефакторинг. Выделение логики LoRa в отдельный класс RadioManager.
+ * Version: 1.3.4
+ * Description: Рефакторинг. Выделение логики питания (AXP2101) в класс PowerManager.
  */
 
  #include <Arduino.h>
  #include <Wire.h>
  #include <SPI.h>              
- #include <XPowersLib.h>       
  #include "configuration.h"
  #include "logger.h"           
  #include "GeoPacker.h"        
@@ -17,7 +16,8 @@
  #include "Retranslation.h"    
  #include "GpsManager.h"       
  #include "DisplayManager.h"   
- #include "RadioManager.h"     // НОВОЕ: Подключаем наш менеджер радио
+ #include "RadioManager.h"     
+ #include "PowerManager.h"     // НОВОЕ: Наш менеджер питания
 
  // --- НАСТРОЙКИ СКАНИРОВАНИЯ ---
  uint32_t networkScanDuration = 30000; 
@@ -26,10 +26,10 @@
  uint8_t myNodeId = 0; 
  uint8_t myMsgSeq = 0;
 
- XPowersAXP2101 pmu;                                    
+ PowerManager power;           // НОВОЕ: Экземпляр менеджера питания                           
  DisplayManager display(0x3c, I2C_SDA, I2C_SCL); 
  GpsManager gps;                                       
- RadioManager radio; // НОВОЕ: Наш умный радиомодуль (название сохранено для совместимости)
+ RadioManager radio; 
  GeoPacker packer;                                      
  NodeDatabase nodeDB;                                   
  Retranslation router;                                  
@@ -68,11 +68,9 @@
      display.showStatus(line1, line2, line3, line4);
  }
 
- void cycleGpsPower() {
-     pmu.disableALDO3(); 
-     delay(2000); 
-     pmu.enableALDO3(); 
-     delay(2000); 
+ // НОВОЕ: Функция-обертка для передачи в GpsManager
+ void cycleGpsPowerCb() {
+     power.cycleGpsPower();
  }
 
 // --- ДИСПЕТЧЕР СООБЩЕНИЙ ---
@@ -263,18 +261,14 @@ void processIncomingPacket(const NavigaHeader& header, const uint8_t* payload) {
      Wire.begin(I2C_SDA, I2C_SCL);                       
      SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS); 
      
-     if (pmu.begin(Wire, AXP2101_SLAVE_ADDRESS, I2C_SDA, I2C_SCL)) {
-         pmu.setALDO2Voltage(3300); pmu.enableALDO2();
-         pmu.setALDO3Voltage(3300); pmu.enableALDO3();
-         pmu.disableALDO4(); pmu.enableSystemVoltageMeasure();  
-     }
+     // НОВОЕ: Инициализация питания через менеджер
+     power.init();
      
      display.init(); 
      display.showLogo();
      
-     gps.init(updateScreenCb, cycleGpsPower); 
+     gps.init(updateScreenCb, cycleGpsPowerCb); 
      
-     // НОВОЕ: Элегантный старт LoRa
      display.showStatus("System Init...", "GPS Init Done", "Init LoRa...", "");
      if (!radio.init(setFlag)) {
          display.showStatus("ERROR", "LoRa Init Failed", "Check Logs", "");
