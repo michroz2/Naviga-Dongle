@@ -1,7 +1,7 @@
 /**
  * File: NodeDatabase.h
- * Version: 1.1.0
- * Description: Добавлено хранение индивидуального SNR для каждого узла.
+ * Version: 1.2.0
+ * Description: Добавлено кэширование дистанции и азимута для каждого узла.
  */
  #ifndef NODE_DATABASE_H
  #define NODE_DATABASE_H
@@ -19,7 +19,9 @@
      uint32_t packedCoords;
      uint32_t lastSeen;
      bool isActive;
-     float snr; // НОВОЕ: Сырое значение уровня сигнала
+     float snr;
+     float distance; // НОВОЕ: Дистанция от нас до узла (в метрах)
+     float azimuth;  // НОВОЕ: Азимут от нас на узел (в градусах)
  };
  
  class NodeDatabase {
@@ -29,9 +31,10 @@
      const NodeRecord* getNode(uint8_t nodeId);
      void updateNodeCoords(uint8_t nodeId, float lat, float lon, uint32_t packed, bool updateTimer = true);
      void updateNodeName(uint8_t nodeId, const char* name);
-     
-     // НОВОЕ: Метод для обновления физического качества связи
      void updateNodeSNR(uint8_t nodeId, float snr);
+     
+     // НОВОЕ: Метод для обновления локальной геометрии
+     void updateNodeDistanceAzimuth(uint8_t nodeId, float dist, float azmt);
  
      void removeNode(uint8_t nodeId);
      void cleanup();

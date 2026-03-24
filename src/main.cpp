@@ -1,9 +1,8 @@
 /**
  * Project: Naviga-Dongle (T-Beam v1.1 Custom E22 + Universal GPS)
  * File: main.cpp
- * Version: 1.3.6
- * Description: Внедрена система индивидуального мониторинга качества связи (SNR). 
- * Настроена шкала качества под физику модуляции LoRa SF9.
+ * Version: 1.3.7
+ * Description: Внедрен динамический пересчет дистанции и азимута для всех активных узлов.
  */
 
  #include <Arduino.h>
@@ -46,27 +45,22 @@
      receivedFlag = true;
  }
 
- float dist = 0.0;                                      
- float azmt = 0.0;                                      
- // Глобальная lastSNR удалена! Качество теперь привязано к узлу.
+ // Глобальные переменные dist и azmt полностью удалены!
 
  uint32_t lastTxTime = 0;                               
  uint32_t lastGpsLogTime = 0;                           
  uint32_t lastCleanupTime = 0;                          
  bool isLonScaleSet = false;                            
 
- // Умный расчет качества связи для дисплея
  int getConnectionQuality(uint8_t targetId) {
-     if (targetId == myNodeId) return 10; // Для себя всегда максимум (+100)
+     if (targetId == myNodeId) return 10; 
 
      const NodeRecord* target = nodeDB.getNode(targetId);
      if (target == nullptr || targetId == 0) return 0;
      if (millis() - target->lastSeen > 30000) return 0;
      
-     // Если прямых пакетов от узла не было, показываем 0
      if (target->snr <= -99.0f) return 0; 
 
-     // Шкала качества, откалиброванная под предел демодуляции SF9 (-11 dB)
      int q = map((long)target->snr, -11, 5, 1, 10);
      if (q < 1) q = 1;
      if (q > 10) q = 10;
@@ -81,7 +75,6 @@
      power.cycleGpsPower();
  }
 
- // --- ФУНКЦИЯ ПЕРЕДАЧИ КООРДИНАТ ---
  void sendLocation() {
      if (!gps.isValid()) {
          LOG_WARN("TX", "Skip TX: GPS location not valid.");
@@ -107,7 +100,6 @@
      radio.startReceive();
  } 
 
- // --- ОБРАБОТКА КОЛЛИЗИИ (СМЕНА ID) ---
  void handleCollision() {
      uint8_t oldId = myNodeId;
      nodeDB.removeNode(oldId); 
@@ -145,7 +137,6 @@
      lastTxTime = millis() - txInterval + 2000; 
  }
 
- // --- ФУНКЦИЯ СКАНИРОВАНИЯ ЭФИРА ---
  void scanNetworkForUniqueId() {
      LOG_INFO("SYS", "Starting network scan for %d ms...", networkScanDuration);
      
@@ -247,7 +238,6 @@
              int state = radio.readData(rxBuffer, len); 
              if (state == RADIOLIB_ERR_NONE) {
                  
-                 // Захватываем качество сигнала сразу после чтения буфера
                  float currentSNR = radio.getSNR();
                  
                  if (len >= sizeof(NavigaHeader)) {
@@ -277,9 +267,6 @@
                          handleCollision();
                      }
 
-                     // Обновляем SNR для ретранслятора. Делаем это ПОСЛЕ обработки коллизии,
-                     // чтобы если это был прямой двойник (relayId == старый myNodeId),
-                     // мы записали реальный SNR в освободившийся слот!
                      if (rxHeader.relayId != myNodeId) {
                          nodeDB.updateNodeSNR(rxHeader.relayId, currentSNR);
                      }
@@ -312,7 +299,7 @@
          radio.startReceive();
      } 
 
-     // 3. ПЕРЕДАЧА LORA (Собственные координаты)
+     // 3. ПЕРЕДАЧА LORA 
      if (millis() - lastTxTime >= txInterval) {
          if (!receivedFlag) { sendLocation(); lastTxTime = millis(); } 
      } 
@@ -344,7 +331,7 @@
          nodeDB.cleanup();
      } 
 
-     // 4. ОБНОВЛЕНИЕ ДИСПЛЕЯ
+     // 4. ОБНОВЛЕНИЕ ДИСПЛЕЯ (И СИНХРОННЫЙ ПЕРЕСЧЕТ ГЕОМЕТРИИ)
      if (millis() - lastGpsLogTime >= gpsUpdateInterval) { 
          lastGpsLogTime = millis();
          digitalWrite(LED_PIN, !digitalRead(LED_PIN)); 
@@ -354,10 +341,13 @@
  
          uint8_t currentTargetId = packetManager.getLastTargetId();
          const NodeRecord* targetNode = nodeDB.getNode(currentTargetId);
-         bool isTargetValid = (targetNode != nullptr);
+         
+         // Убедимся, что цель активна
+         bool isTargetValid = (targetNode != nullptr && targetNode->isActive);
 
          if (!isTargetValid && currentTargetId != 0) {
              packetManager.clearLastTargetId();
+             currentTargetId = 0;
          } 
 
          if (!gps.isValid()) {
@@ -372,19 +362,26 @@
                  isLonScaleSet = true;
              } 
 
+             // НОВОЕ: Единый цикл распаковки и пересчета дистанции/азимута
              for (int i = 1; i < 255; i++) {
                  const NodeRecord* node = nodeDB.getNode(i);
-                 if (node != nullptr && node->packedCoords != 0 && node->lat == 0.0f && node->lon == 0.0f) {
-                     float unpLat, unpLon;
-                     packer.unpack(node->packedCoords, gps.getLat(), gps.getLon(), unpLat, unpLon);
-                     nodeDB.updateNodeCoords(i, unpLat, unpLon, node->packedCoords, false);
+                 if (node != nullptr && node->isActive) {
+                     
+                     // 1. Распаковываем старые координаты, если они ждали фикса GPS
+                     if (node->packedCoords != 0 && node->lat == 0.0f && node->lon == 0.0f) {
+                         float unpLat, unpLon;
+                         packer.unpack(node->packedCoords, gps.getLat(), gps.getLon(), unpLat, unpLon);
+                         nodeDB.updateNodeCoords(i, unpLat, unpLon, node->packedCoords, false);
+                     }
+                     
+                     // 2. Пересчитываем геометрию (если мы знаем координаты узла)
+                     if (node->lat != 0.0f || node->lon != 0.0f) {
+                         float d = gps.distanceTo(node->lat, node->lon);
+                         float a = gps.courseTo(node->lat, node->lon);
+                         nodeDB.updateNodeDistanceAzimuth(i, d, a);
+                     }
                  }
              }
-
-             if (isTargetValid) {
-                 dist = gps.distanceTo(targetNode->lat, targetNode->lon);
-                 azmt = gps.courseTo(targetNode->lat, targetNode->lon);
-             } 
          } 
  
          line2 = "My: " + String(myNodeId) + "-" + String(myMsgSeq);
@@ -393,8 +390,12 @@
          uint8_t neighbors = (totalNodes > 0) ? (totalNodes - 1) : 0;
          line3 = "Neighbors: " + String(neighbors);
          
+         // НОВОЕ: Читаем готовые векторы прямо из базы
          if (isTargetValid) {
-             line4 = String(targetNode->nodeId) + ": " + String((int)dist) + "m/" + String((int)azmt) + "/" + String(getConnectionQuality(targetNode->nodeId));
+             line4 = String(targetNode->nodeId) + ": " + 
+                     String((int)targetNode->distance) + "m/" + 
+                     String((int)targetNode->azimuth) + "/" + 
+                     String(getConnectionQuality(targetNode->nodeId));
          } else {
              line4 = "No targets";
          } 

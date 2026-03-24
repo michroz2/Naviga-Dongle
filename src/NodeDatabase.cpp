@@ -1,7 +1,6 @@
 /**
  * File: NodeDatabase.cpp
- * Version: 1.1.0
- * Description: Реализация с поддержкой SNR.
+ * Version: 1.2.0
  */
  #include "NodeDatabase.h"
  #include <string.h>
@@ -14,7 +13,9 @@
          nodes[i].packedCoords = 0;
          nodes[i].lat = 0.0f;
          nodes[i].lon = 0.0f;
-         nodes[i].snr = -100.0f; // Дефолтное нереальное значение
+         nodes[i].snr = -100.0f; 
+         nodes[i].distance = 0.0f; // Дефолт
+         nodes[i].azimuth = 0.0f;  // Дефолт
          snprintf(nodes[i].nodeName, sizeof(nodes[i].nodeName), "Node-%d", i);
      }
  }
@@ -28,21 +29,30 @@
          nodes[nodeId].packedCoords = 0;
          nodes[nodeId].lat = 0.0f;
          nodes[nodeId].lon = 0.0f;
-         nodes[nodeId].snr = -100.0f; // При воскрешении узла всегда ставим -100
+         nodes[nodeId].snr = -100.0f; 
+         nodes[nodeId].distance = 0.0f;
+         nodes[nodeId].azimuth = 0.0f;
          snprintf(nodes[nodeId].nodeName, sizeof(nodes[nodeId].nodeName), "Node-%d", nodeId);
      }
      return &nodes[nodeId];
  }
  
- // Запись реального SNR
  void NodeDatabase::updateNodeSNR(uint8_t nodeId, float snr) {
      if (nodeId == 0 || nodeId >= MAX_NODES) return;
-     
-     // Вызов getNode автоматически активирует узел, если его не было
      const NodeRecord* node = getNode(nodeId); 
      if (node != nullptr) {
          nodes[nodeId].snr = snr;
-         nodes[nodeId].lastSeen = millis(); // Услышали физически = обновили таймер жизни
+         nodes[nodeId].lastSeen = millis(); 
+     }
+ }
+ 
+ // НОВОЕ: Запись геометрии без изменения таймера активности
+ void NodeDatabase::updateNodeDistanceAzimuth(uint8_t nodeId, float dist, float azmt) {
+     if (nodeId == 0 || nodeId >= MAX_NODES) return;
+     const NodeRecord* node = getNode(nodeId);
+     if (node != nullptr) {
+         nodes[nodeId].distance = dist;
+         nodes[nodeId].azimuth = azmt;
      }
  }
  
@@ -70,7 +80,6 @@
  void NodeDatabase::removeNode(uint8_t nodeId) {
      if (nodeId == 0 || nodeId >= MAX_NODES) return;
      nodes[nodeId].isActive = false;
-     // Данные не затираем. Они обнулятся при следующем вызове getNode
  }
  
  void NodeDatabase::cleanup() {
