@@ -1,8 +1,9 @@
 /**
  * Project: Naviga-Dongle (T-Beam v1.1 Custom E22 + Universal GPS)
  * File: main.cpp
- * Version: 1.3.7
- * Description: Внедрен динамический пересчет дистанции и азимута для всех активных узлов.
+ * Version: 1.3.9
+ * Description: Завершена архитектура единой очереди передач (Unified Tx Queue). 
+ * Интегрирован алгоритм CSMA/CA с поддержкой подавления широковещания.
  */
 
  #include <Arduino.h>
@@ -19,6 +20,7 @@
  #include "RadioManager.h"     
  #include "PowerManager.h"     
  #include "PacketManager.h"    
+ #include "TxManager.h"        
 
  // --- НАСТРОЙКИ СКАНИРОВАНИЯ ---
  uint32_t networkScanDuration = 30000; 
@@ -35,6 +37,7 @@
  NodeDatabase nodeDB;                                   
  Retranslation router;                                  
  PacketManager packetManager(nodeDB, gps, packer);
+ TxManager txManager(radio, packer, myNodeId, myMsgSeq);
 
  volatile bool receivedFlag = false;                    
 
@@ -44,8 +47,6 @@
  void setFlag(void) {
      receivedFlag = true;
  }
-
- // Глобальные переменные dist и azmt полностью удалены!
 
  uint32_t lastTxTime = 0;                               
  uint32_t lastGpsLogTime = 0;                           
@@ -75,31 +76,6 @@
      power.cycleGpsPower();
  }
 
- void sendLocation() {
-     if (!gps.isValid()) {
-         LOG_WARN("TX", "Skip TX: GPS location not valid.");
-         return;
-     } 
-     uint32_t packedCoords = packer.pack(gps.getLat(), gps.getLon());
-     
-     NavigaHeader txHeader;
-     txHeader.senderId = myNodeId;
-     txHeader.relayId = myNodeId; 
-     txHeader.msgSeq = myMsgSeq++;
-     txHeader.setTypeAndTTL(MSG_COORDS, 15); 
-     
-     uint8_t txBuffer[8];
-     memcpy(txBuffer, &txHeader, sizeof(NavigaHeader));
-     memcpy(txBuffer + 4, &packedCoords, sizeof(packedCoords));
-     
-     LOG_INFO("TX", "Starting TX... Seq: %d, Packed: 0x%08X", txHeader.msgSeq, packedCoords);
-     
-     radio.standby();
-     radio.transmit(txBuffer, 8); 
-     receivedFlag = false;
-     radio.startReceive();
- } 
-
  void handleCollision() {
      uint8_t oldId = myNodeId;
      nodeDB.removeNode(oldId); 
@@ -117,22 +93,9 @@
          nodeDB.updateNodeCoords(myNodeId, gps.getLat(), gps.getLon(), 0, false);
      }
      
-     NavigaHeader infoHeader;
-     infoHeader.senderId = myNodeId;
-     infoHeader.relayId = myNodeId;
-     infoHeader.msgSeq = myMsgSeq++;
-     infoHeader.setTypeAndTTL(MSG_NODE_INFO, 15);
-     
-     PayloadNodeInfo infoPayload;
-     snprintf(infoPayload.nodeName, sizeof(infoPayload.nodeName), "Node-%d", myNodeId);
-     
-     uint8_t txBuffer[sizeof(NavigaHeader) + sizeof(PayloadNodeInfo)];
-     memcpy(txBuffer, &infoHeader, sizeof(NavigaHeader));
-     memcpy(txBuffer + sizeof(NavigaHeader), &infoPayload, sizeof(PayloadNodeInfo));
-     
-     delay(random(100, 500)); 
-     radio.standby();
-     radio.transmit(txBuffer, sizeof(txBuffer));
+     char myName[16];
+     snprintf(myName, sizeof(myName), "Node-%d", myNodeId);
+     txManager.sendNodeInfo(myName, TX_CRITICAL);
      
      lastTxTime = millis() - txInterval + 2000; 
  }
@@ -193,8 +156,6 @@
      LOG_INFO("SYS", "Scan complete. Selected unique Node ID: %d", myNodeId);
      display.showStatus("Scan Complete", "My new ID:", String(myNodeId), "Starting...");
      delay(2000);
-     
-     lastTxTime = millis(); 
  }
 
  void setup() {
@@ -222,6 +183,12 @@
      }
 
      scanNetworkForUniqueId();
+     
+     char myName[16];
+     snprintf(myName, sizeof(myName), "Node-%d", myNodeId);
+     txManager.sendNodeInfo(myName, TX_NORMAL);
+     
+     lastTxTime = millis(); 
  } 
  
  void loop() {
@@ -279,9 +246,9 @@
                      }
                      else if (router.isDuplicate(rxHeader.senderId, rxHeader.msgSeq)) {
                          LOG_WARN("LORA", "Duplicate pkt Node %d Seq %d dropped.", rxHeader.senderId, rxHeader.msgSeq);
-                         if (router.shouldAbortRelay(rxHeader.senderId, rxHeader.msgSeq)) {
-                             router.abortRelay(rxHeader.senderId, rxHeader.msgSeq);
-                         }
+                         // НОВОЕ: Транзитный дубликат означает, что кто-то уже сделал работу за нас!
+                         // Вызываем отмену ретрансляции прямо здесь.
+                         txManager.abortRelay(rxHeader.senderId, rxHeader.msgSeq);
                      }
                      else {
                          LOG_INFO("LORA", "Valid pkt Type %d from Node %d (Relay: %d, Seq: %d, SNR: %.1f)", 
@@ -290,7 +257,8 @@
                          packetManager.processPacket(rxHeader, rxBuffer + sizeof(NavigaHeader));
                          
                          if (router.shouldRetransmit(rxHeader)) {
-                             router.enqueuePacket(rxHeader, rxBuffer + sizeof(NavigaHeader), payloadLen, currentSNR);
+                             // Передаем в очередь MAC-уровня на отправку с SNR-задержкой
+                             txManager.enqueueRelay(rxHeader, rxBuffer + sizeof(NavigaHeader), payloadLen, currentSNR);
                          } 
                      } 
                  } 
@@ -299,31 +267,18 @@
          radio.startReceive();
      } 
 
-     // 3. ПЕРЕДАЧА LORA 
+     // 3. ПЕРЕДАЧА LORA (Добавление собственных пакетов в общую очередь)
      if (millis() - lastTxTime >= txInterval) {
-         if (!receivedFlag) { sendLocation(); lastTxTime = millis(); } 
+         if (gps.isValid()) {
+             txManager.sendCoords(gps.getLat(), gps.getLon(), TX_HIGH);
+         } else {
+             LOG_WARN("TX", "Skip TX: GPS location not valid.");
+         }
+         lastTxTime = millis(); 
      } 
 
-     // 3.1. РЕТРАНСЛЯЦИЯ ПАКЕТОВ ИЗ ОЧЕРЕДИ
-     NavigaHeader relayHeader;
-     uint8_t relayPayload[MAX_PAYLOAD_SIZE];
-     size_t relayPayloadLen;
-     
-     if (!receivedFlag && router.getReadyPacket(myNodeId, relayHeader, relayPayload, relayPayloadLen)) {
-         uint8_t txBuffer[sizeof(NavigaHeader) + MAX_PAYLOAD_SIZE];
-         size_t totalLen = sizeof(NavigaHeader) + relayPayloadLen;
-         
-         memcpy(txBuffer, &relayHeader, sizeof(NavigaHeader));
-         memcpy(txBuffer + sizeof(NavigaHeader), relayPayload, relayPayloadLen);
-         
-         LOG_INFO("RELAY", "Transmitting pkt Seq %d from Node %d. New TTL: %d", 
-                  relayHeader.msgSeq, relayHeader.senderId, relayHeader.getTTL());
-         
-         radio.standby();
-         radio.transmit(txBuffer, totalLen); 
-         receivedFlag = false;
-         radio.startReceive();
-     }
+     // 3.1. ПРОЦЕССИНГ ЕДИНОЙ ОЧЕРЕДИ (Заменил старый ручной блок)
+     txManager.processQueue();
 
      // 3.2. ПЕРИОДИЧЕСКАЯ ОЧИСТКА БАЗЫ 
      if (millis() - lastCleanupTime >= NODE_TIMEOUT_MS) {
@@ -331,7 +286,7 @@
          nodeDB.cleanup();
      } 
 
-     // 4. ОБНОВЛЕНИЕ ДИСПЛЕЯ (И СИНХРОННЫЙ ПЕРЕСЧЕТ ГЕОМЕТРИИ)
+     // 4. ОБНОВЛЕНИЕ ДИСПЛЕЯ
      if (millis() - lastGpsLogTime >= gpsUpdateInterval) { 
          lastGpsLogTime = millis();
          digitalWrite(LED_PIN, !digitalRead(LED_PIN)); 
@@ -342,7 +297,6 @@
          uint8_t currentTargetId = packetManager.getLastTargetId();
          const NodeRecord* targetNode = nodeDB.getNode(currentTargetId);
          
-         // Убедимся, что цель активна
          bool isTargetValid = (targetNode != nullptr && targetNode->isActive);
 
          if (!isTargetValid && currentTargetId != 0) {
@@ -362,19 +316,16 @@
                  isLonScaleSet = true;
              } 
 
-             // НОВОЕ: Единый цикл распаковки и пересчета дистанции/азимута
              for (int i = 1; i < 255; i++) {
                  const NodeRecord* node = nodeDB.getNode(i);
                  if (node != nullptr && node->isActive) {
                      
-                     // 1. Распаковываем старые координаты, если они ждали фикса GPS
                      if (node->packedCoords != 0 && node->lat == 0.0f && node->lon == 0.0f) {
                          float unpLat, unpLon;
                          packer.unpack(node->packedCoords, gps.getLat(), gps.getLon(), unpLat, unpLon);
                          nodeDB.updateNodeCoords(i, unpLat, unpLon, node->packedCoords, false);
                      }
                      
-                     // 2. Пересчитываем геометрию (если мы знаем координаты узла)
                      if (node->lat != 0.0f || node->lon != 0.0f) {
                          float d = gps.distanceTo(node->lat, node->lon);
                          float a = gps.courseTo(node->lat, node->lon);
@@ -390,7 +341,6 @@
          uint8_t neighbors = (totalNodes > 0) ? (totalNodes - 1) : 0;
          line3 = "Neighbors: " + String(neighbors);
          
-         // НОВОЕ: Читаем готовые векторы прямо из базы
          if (isTargetValid) {
              line4 = String(targetNode->nodeId) + ": " + 
                      String((int)targetNode->distance) + "m/" + 
