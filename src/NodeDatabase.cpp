@@ -1,6 +1,8 @@
 /**
  * File: NodeDatabase.cpp
- * Version: 1.2.0
+ * Version: 1.3.1
+ * Description: Реализация базы данных узлов.
+ * Изменение: Приведение к новым правилам оформления (комментирование скобок).
  */
  #include "NodeDatabase.h"
  #include <string.h>
@@ -14,11 +16,12 @@
          nodes[i].lat = 0.0f;
          nodes[i].lon = 0.0f;
          nodes[i].snr = -100.0f; 
-         nodes[i].distance = 0.0f; // Дефолт
-         nodes[i].azimuth = 0.0f;  // Дефолт
+         nodes[i].distance = 0.0f; 
+         nodes[i].azimuth = 0.0f;  
+         nodes[i].type = NODE_STALKER; // Дефолтный тип
          snprintf(nodes[i].nodeName, sizeof(nodes[i].nodeName), "Node-%d", i);
-     }
- }
+     } // for (int i = 0; i < MAX_NODES; i++)
+ } // NodeDatabase::NodeDatabase()
  
  const NodeRecord* NodeDatabase::getNode(uint8_t nodeId) {
      if (nodeId == 0 || nodeId >= MAX_NODES) return nullptr;
@@ -32,10 +35,20 @@
          nodes[nodeId].snr = -100.0f; 
          nodes[nodeId].distance = 0.0f;
          nodes[nodeId].azimuth = 0.0f;
+         nodes[nodeId].type = NODE_STALKER;
          snprintf(nodes[nodeId].nodeName, sizeof(nodes[nodeId].nodeName), "Node-%d", nodeId);
-     }
+     } // if (!nodes[nodeId].isActive)
      return &nodes[nodeId];
- }
+ } // NodeDatabase::getNode()
+ 
+ void NodeDatabase::updateNodeInfo(uint8_t nodeId, const char* name, uint8_t nodeType) {
+     if (nodeId == 0 || nodeId >= MAX_NODES) return;
+     getNode(nodeId);
+     nodes[nodeId].type = nodeType;
+     strncpy(nodes[nodeId].nodeName, name, sizeof(nodes[nodeId].nodeName) - 1);
+     nodes[nodeId].nodeName[sizeof(nodes[nodeId].nodeName) - 1] = '\0';
+     nodes[nodeId].lastSeen = millis();
+ } // NodeDatabase::updateNodeInfo()
  
  void NodeDatabase::updateNodeSNR(uint8_t nodeId, float snr) {
      if (nodeId == 0 || nodeId >= MAX_NODES) return;
@@ -43,18 +56,17 @@
      if (node != nullptr) {
          nodes[nodeId].snr = snr;
          nodes[nodeId].lastSeen = millis(); 
-     }
- }
+     } // if (node != nullptr)
+ } // NodeDatabase::updateNodeSNR()
  
- // НОВОЕ: Запись геометрии без изменения таймера активности
  void NodeDatabase::updateNodeDistanceAzimuth(uint8_t nodeId, float dist, float azmt) {
      if (nodeId == 0 || nodeId >= MAX_NODES) return;
      const NodeRecord* node = getNode(nodeId);
      if (node != nullptr) {
          nodes[nodeId].distance = dist;
          nodes[nodeId].azimuth = azmt;
-     }
- }
+     } // if (node != nullptr)
+ } // NodeDatabase::updateNodeDistanceAzimuth()
  
  void NodeDatabase::updateNodeCoords(uint8_t nodeId, float lat, float lon, uint32_t packed, bool updateTimer) {
      if (nodeId == 0 || nodeId >= MAX_NODES) return;
@@ -63,38 +75,30 @@
      nodes[nodeId].lon = lon;
      if (packed != 0) {
          nodes[nodeId].packedCoords = packed;
-     }
+     } // if (packed != 0)
      if (updateTimer) {
          nodes[nodeId].lastSeen = millis();
-     }
- }
- 
- void NodeDatabase::updateNodeName(uint8_t nodeId, const char* name) {
-     if (nodeId == 0 || nodeId >= MAX_NODES) return;
-     getNode(nodeId);
-     strncpy(nodes[nodeId].nodeName, name, 15);
-     nodes[nodeId].nodeName[15] = '\0';
-     nodes[nodeId].lastSeen = millis();
- }
+     } // if (updateTimer)
+ } // NodeDatabase::updateNodeCoords()
  
  void NodeDatabase::removeNode(uint8_t nodeId) {
      if (nodeId == 0 || nodeId >= MAX_NODES) return;
      nodes[nodeId].isActive = false;
- }
+ } // NodeDatabase::removeNode()
  
  void NodeDatabase::cleanup() {
      uint32_t now = millis();
      for (int i = 1; i < MAX_NODES; i++) {
          if (nodes[i].isActive && (now - nodes[i].lastSeen > NODE_TIMEOUT_MS)) {
              nodes[i].isActive = false;
-         }
-     }
- }
+         } // if (nodes[i].isActive && ...)
+     } // for (int i = 1; i < MAX_NODES; i++)
+ } // NodeDatabase::cleanup()
  
  uint8_t NodeDatabase::getActiveNodesCount() const {
      uint8_t count = 0;
      for (int i = 1; i < MAX_NODES; i++) {
          if (nodes[i].isActive) count++;
-     }
+     } // for (int i = 1; i < MAX_NODES; i++)
      return count;
- }
+ } // NodeDatabase::getActiveNodesCount()

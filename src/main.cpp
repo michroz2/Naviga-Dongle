@@ -1,9 +1,9 @@
 /**
  * Project: Naviga-Dongle (T-Beam v1.1 Custom E22 + Universal GPS)
  * File: main.cpp
- * Version: 1.3.9
- * Description: Завершена архитектура единой очереди передач (Unified Tx Queue). 
- * Интегрирован алгоритм CSMA/CA с поддержкой подавления широковещания.
+ * Version: 1.4.1
+ * Description: Главный файл оркестратора.
+ * Изменение: Внедрена роль (тип узла), комментирование закрывающих скобок.
  */
 
  #include <Arduino.h>
@@ -28,6 +28,7 @@
 
  uint8_t myNodeId = 0; 
  uint8_t myMsgSeq = 0;
+ uint8_t myNodeType = NODE_STALKER; // Наша роль по умолчанию
 
  PowerManager power;                                      
  DisplayManager display(0x3c, I2C_SDA, I2C_SCL); 
@@ -46,7 +47,7 @@
  #endif
  void setFlag(void) {
      receivedFlag = true;
- }
+ } // setFlag()
 
  uint32_t lastTxTime = 0;                               
  uint32_t lastGpsLogTime = 0;                           
@@ -66,15 +67,15 @@
      if (q < 1) q = 1;
      if (q > 10) q = 10;
      return q;
- } 
+ } // getConnectionQuality()
 
  void updateScreenCb(String line1, String line2, String line3, String line4) {
      display.showStatus(line1, line2, line3, line4);
- }
+ } // updateScreenCb()
 
  void cycleGpsPowerCb() {
      power.cycleGpsPower();
- }
+ } // cycleGpsPowerCb()
 
  void handleCollision() {
      uint8_t oldId = myNodeId;
@@ -83,7 +84,7 @@
      randomSeed(esp_random());
      do {
          myNodeId = random(1, 255);
-     } while (nodeDB.getNode(myNodeId) != nullptr);
+     } while (nodeDB.getNode(myNodeId) != nullptr); // do-while
      
      LOG_WARN("COLLISION", "ID %d is taken! Switched to new ID: %d", oldId, myNodeId);
      
@@ -91,14 +92,14 @@
      
      if (gps.isValid()) {
          nodeDB.updateNodeCoords(myNodeId, gps.getLat(), gps.getLon(), 0, false);
-     }
+     } // if (gps.isValid())
      
-     char myName[16];
+     char myName[12];
      snprintf(myName, sizeof(myName), "Node-%d", myNodeId);
-     txManager.sendNodeInfo(myName, TX_CRITICAL);
+     txManager.sendNodeInfo(myName, myNodeType, TX_CRITICAL);
      
      lastTxTime = millis() - txInterval + 2000; 
- }
+ } // handleCollision()
 
  void scanNetworkForUniqueId() {
      LOG_INFO("SYS", "Starting network scan for %d ms...", networkScanDuration);
@@ -119,7 +120,7 @@
              lastDispUpdate = now;
              uint32_t left = (networkScanDuration - (now - scanStart)) / 1000;
              display.showStatus("Scanning Net...", "Time left: " + String(left) + " s", "Nodes Found: " + String(nodeDB.getActiveNodesCount()), "Please wait...");
-         }
+         } // if (now - lastDispUpdate >= 1000)
          
          if (receivedFlag) {
              noInterrupts(); receivedFlag = false; interrupts();
@@ -136,33 +137,33 @@
                      if (router.isValidPacket(rxHeader.getType(), payloadLen)) {
                          if (!router.isDuplicate(rxHeader.senderId, rxHeader.msgSeq)) {
                              packetManager.processPacket(rxHeader, rxBuffer + sizeof(NavigaHeader));
-                         }
-                     }
-                 }
-             }
+                         } // if (!router.isDuplicate(...))
+                     } // if (router.isValidPacket(...))
+                 } // if (state == RADIOLIB_ERR_NONE)
+             } // if (len >= sizeof(NavigaHeader))
              radio.startReceive();
-         }
+         } // if (receivedFlag)
          
          gps.update(); 
-     } 
+     } // while (millis() - scanStart < networkScanDuration)
      
      digitalWrite(RED_LED_PIN, HIGH); 
      
      randomSeed(esp_random());
      do {
          myNodeId = random(1, 255);
-     } while (nodeDB.getNode(myNodeId) != nullptr); 
+     } while (nodeDB.getNode(myNodeId) != nullptr); // do-while
      
      LOG_INFO("SYS", "Scan complete. Selected unique Node ID: %d", myNodeId);
      display.showStatus("Scan Complete", "My new ID:", String(myNodeId), "Starting...");
      delay(2000);
- }
+ } // scanNetworkForUniqueId()
 
  void setup() {
      delay(500); 
      Serial.begin(115200);
      unsigned long start = millis();
-     while (!Serial && (millis() - start < 3000));
+     while (!Serial && (millis() - start < 3000)); // while
      LOG_INFO("SYS", "--- DONGLE BOOT START ---");
      pinMode(LORA_ONBOARD_CS, OUTPUT);
      digitalWrite(LORA_ONBOARD_CS, HIGH);
@@ -180,22 +181,20 @@
      if (!radio.init(setFlag)) {
          display.showStatus("ERROR", "LoRa Init Failed", "Check Logs", "");
          delay(3000);
-     }
+     } // if (!radio.init(...))
 
      scanNetworkForUniqueId();
      
-     char myName[16];
+     char myName[12];
      snprintf(myName, sizeof(myName), "Node-%d", myNodeId);
-     txManager.sendNodeInfo(myName, TX_NORMAL);
+     txManager.sendNodeInfo(myName, myNodeType, TX_NORMAL);
      
      lastTxTime = millis(); 
- } 
+ } // setup()
  
  void loop() {
-     // 1. ЧТЕНИЕ GPS 
      gps.update();
 
-     // 2. ОБРАБОТКА LORA ПРИЕМА
      if (receivedFlag) {
          noInterrupts(); receivedFlag = false; interrupts();
          
@@ -218,8 +217,7 @@
                      if (rxHeader.relayId == myNodeId) {
                          isCollision = true;
                          LOG_WARN("LORA", "Collision Type 1: Relay ID == myNodeId!");
-                     } 
-                     else if (rxHeader.senderId == myNodeId) {
+                     } else if (rxHeader.senderId == myNodeId) {
                          int8_t seqDiff = (int8_t)(myMsgSeq - rxHeader.msgSeq);
                          if (seqDiff <= 0 || seqDiff > 10) {
                              isCollision = true;
@@ -227,66 +225,56 @@
                          } else {
                              LOG_INFO("LORA", "Valid echo of our pkt Seq %d", rxHeader.msgSeq);
                              isOwnEcho = true;
-                         }
-                     }
+                         } // if (seqDiff <= 0 || ...)
+                     } // if (rxHeader.relayId == myNodeId)
 
                      if (isCollision) {
                          handleCollision();
-                     }
+                     } // if (isCollision)
 
                      if (rxHeader.relayId != myNodeId) {
                          nodeDB.updateNodeSNR(rxHeader.relayId, currentSNR);
-                     }
+                     } // if (rxHeader.relayId != myNodeId)
 
                      if (isOwnEcho) {
                          // do nothing
-                     } 
-                     else if (!router.isValidPacket(rxHeader.getType(), payloadLen)) {
+                     } else if (!router.isValidPacket(rxHeader.getType(), payloadLen)) {
                          LOG_WARN("LORA", "Invalid packet format/size! Type: %d, Len: %d", rxHeader.getType(), payloadLen);
-                     }
-                     else if (router.isDuplicate(rxHeader.senderId, rxHeader.msgSeq)) {
+                     } else if (router.isDuplicate(rxHeader.senderId, rxHeader.msgSeq)) {
                          LOG_WARN("LORA", "Duplicate pkt Node %d Seq %d dropped.", rxHeader.senderId, rxHeader.msgSeq);
-                         // НОВОЕ: Транзитный дубликат означает, что кто-то уже сделал работу за нас!
-                         // Вызываем отмену ретрансляции прямо здесь.
                          txManager.abortRelay(rxHeader.senderId, rxHeader.msgSeq);
-                     }
-                     else {
+                     } else {
                          LOG_INFO("LORA", "Valid pkt Type %d from Node %d (Relay: %d, Seq: %d, SNR: %.1f)", 
                                   rxHeader.getType(), rxHeader.senderId, rxHeader.relayId, rxHeader.msgSeq, currentSNR);
                          
                          packetManager.processPacket(rxHeader, rxBuffer + sizeof(NavigaHeader));
                          
                          if (router.shouldRetransmit(rxHeader)) {
-                             // Передаем в очередь MAC-уровня на отправку с SNR-задержкой
                              txManager.enqueueRelay(rxHeader, rxBuffer + sizeof(NavigaHeader), payloadLen, currentSNR);
-                         } 
-                     } 
-                 } 
-             } 
-         } 
+                         } // if (router.shouldRetransmit(...))
+                     } // if (isOwnEcho)
+                 } // if (len >= sizeof(NavigaHeader))
+             } // if (state == RADIOLIB_ERR_NONE)
+         } // if (len > 0)
          radio.startReceive();
-     } 
+     } // if (receivedFlag)
 
-     // 3. ПЕРЕДАЧА LORA (Добавление собственных пакетов в общую очередь)
      if (millis() - lastTxTime >= txInterval) {
          if (gps.isValid()) {
              txManager.sendCoords(gps.getLat(), gps.getLon(), TX_HIGH);
          } else {
              LOG_WARN("TX", "Skip TX: GPS location not valid.");
-         }
+         } // if (gps.isValid())
          lastTxTime = millis(); 
-     } 
+     } // if (millis() - lastTxTime >= txInterval)
 
-     // 3.1. ПРОЦЕССИНГ ЕДИНОЙ ОЧЕРЕДИ (Заменил старый ручной блок)
      txManager.processQueue();
 
-     // 3.2. ПЕРИОДИЧЕСКАЯ ОЧИСТКА БАЗЫ 
      if (millis() - lastCleanupTime >= NODE_TIMEOUT_MS) {
          lastCleanupTime = millis();
          nodeDB.cleanup();
-     } 
+     } // if (millis() - lastCleanupTime >= ...)
 
-     // 4. ОБНОВЛЕНИЕ ДИСПЛЕЯ
      if (millis() - lastGpsLogTime >= gpsUpdateInterval) { 
          lastGpsLogTime = millis();
          digitalWrite(LED_PIN, !digitalRead(LED_PIN)); 
@@ -302,7 +290,7 @@
          if (!isTargetValid && currentTargetId != 0) {
              packetManager.clearLastTargetId();
              currentTargetId = 0;
-         } 
+         } // if (!isTargetValid && currentTargetId != 0)
 
          if (!gps.isValid()) {
              line1 = (sats > 0) ? ("GPS Wait " + String(sats)) : "GPS ERROR";
@@ -314,7 +302,7 @@
              if (!isLonScaleSet) {
                  packer.updateLonScale(gps.getLat());
                  isLonScaleSet = true;
-             } 
+             } // if (!isLonScaleSet)
 
              for (int i = 1; i < 255; i++) {
                  const NodeRecord* node = nodeDB.getNode(i);
@@ -324,16 +312,16 @@
                          float unpLat, unpLon;
                          packer.unpack(node->packedCoords, gps.getLat(), gps.getLon(), unpLat, unpLon);
                          nodeDB.updateNodeCoords(i, unpLat, unpLon, node->packedCoords, false);
-                     }
+                     } // if (node->packedCoords != 0 && ...)
                      
                      if (node->lat != 0.0f || node->lon != 0.0f) {
                          float d = gps.distanceTo(node->lat, node->lon);
                          float a = gps.courseTo(node->lat, node->lon);
                          nodeDB.updateNodeDistanceAzimuth(i, d, a);
-                     }
-                 }
-             }
-         } 
+                     } // if (node->lat != 0.0f || ...)
+                 } // if (node != nullptr && node->isActive)
+             } // for (int i = 1; i < 255; i++)
+         } // if (!gps.isValid())
  
          line2 = "My: " + String(myNodeId) + "-" + String(myMsgSeq);
          
@@ -348,8 +336,8 @@
                      String(getConnectionQuality(targetNode->nodeId));
          } else {
              line4 = "No targets";
-         } 
+         } // if (isTargetValid)
 
          display.showStatus(line1, line2, line3, line4); 
-     } // if displayInterval
+     } // if (millis() - lastGpsLogTime >= gpsUpdateInterval)
  } // loop()

@@ -1,69 +1,71 @@
 /**
- * Project: Naviga-Dongle (T-Beam v1.1 + Custom E22)
  * File: NavigaProtocol.h
- * Version: 1.2.4
- * Description: Протокол коммуникации между узлами и политики маршрутизации
+ * Version: 1.1.2
+ * Description: Добавлены типы узлов (Tracker, Stalker, Relay) в структуру NodeInfo.
+ * Изменение: Приведение к новым правилам оформления (комментирование скобок).
  */
-
  #ifndef NAVIGA_PROTOCOL_H
  #define NAVIGA_PROTOCOL_H
  
- #include <stdint.h>
+ #include <Arduino.h>
  
- // Типы сообщений (Биты 7-4 байта Control)
  enum NavigaMessageType : uint8_t {
-     MSG_NODE_INFO = 0x01,
-     MSG_COORDS    = 0x02,
-     MSG_LEAVE     = 0x03
- };
+     MSG_COORDS = 1,
+     MSG_NODE_INFO = 2,
+     MSG_LEAVE = 3
+ }; // enum NavigaMessageType
  
- #pragma pack(push, 1) // Отключаем выравнивание для точной побайтовой передачи по радио
+ // НОВОЕ: Типы узлов
+ enum NodeType : uint8_t {
+     NODE_TRACKER = 0, // Мобильный, приоритетно шлет координаты
+     NODE_STALKER = 1, // Мобильный/умеренный, шлет координаты, умно ретранслирует
+     NODE_RELAY = 2    // Стационарный, ретранслирует всё
+ }; // enum NodeType
  
- // 1. Универсальный заголовок (4 байта)
  struct NavigaHeader {
-     uint8_t senderId; 
-     uint8_t relayId;  
-     uint8_t msgSeq;   
-     uint8_t control;  
-     
+     uint8_t senderId;
+     uint8_t relayId;
+     uint8_t msgSeq;
+     uint8_t typeAndTTL; 
+ 
      void setTypeAndTTL(NavigaMessageType type, uint8_t ttl) {
-         control = ((type & 0x0F) << 4) | (ttl & 0x0F);
-     }
-     uint8_t getType() const { return (control >> 4) & 0x0F; }
-     uint8_t getTTL() const { return control & 0x0F; }
- };
+         typeAndTTL = (type << 4) | (ttl & 0x0F);
+     } // setTypeAndTTL()
  
- // 2. Тип 0x01: NODE INFO (12 байт)
- struct PayloadNodeInfo {
-     char nodeName[12];
- };
+     NavigaMessageType getType() const {
+         return static_cast<NavigaMessageType>(typeAndTTL >> 4);
+     } // getType()
  
- // 3. Тип 0x02: COORDS (4 байта)
+     uint8_t getTTL() const {
+         return typeAndTTL & 0x0F;
+     } // getTTL()
+ }; // struct NavigaHeader
+ 
  struct PayloadCoords {
-     uint16_t latCompressed; 
-     uint16_t lonCompressed; 
- };
+     uint32_t packedCoords;
+ }; // struct PayloadCoords
  
- // 4. Тип 0x03: LEAVE (1 байт)
+ struct PayloadNodeInfo {
+     uint8_t nodeType;
+     char nodeName[11]; // Строго 11 байт (+1 байт типа = 12 байт Payload)
+ }; // struct PayloadNodeInfo
+ 
  struct PayloadLeave {
-     uint8_t reason; // 0 - штатное выключение, 1 - разряд батареи, и т.д.
- };
+     uint8_t reason;
+ }; // struct PayloadLeave
  
- #pragma pack(pop) // Возвращаем стандартное выравнивание компилятора
- 
- // --- ПОЛИТИКА МАРШРУТИЗАЦИИ (Справочник) ---
  struct MessagePolicy {
-     bool isRoutable;       
-     uint8_t expectedSize;  
- };
+     bool isRoutable;
+     size_t expectedSize;
+ }; // struct MessagePolicy
  
  inline MessagePolicy getMessagePolicy(uint8_t msgType) {
      switch (msgType) {
-         case MSG_NODE_INFO: return {true, sizeof(PayloadNodeInfo)};
-         case MSG_COORDS:    return {true, sizeof(PayloadCoords)};
-         case MSG_LEAVE:     return {true, sizeof(PayloadLeave)}; // Теперь четко 1 байт
-         default:            return {false, 0}; 
-     } // switch
+         case MSG_COORDS:     return {true,  sizeof(PayloadCoords)};
+         case MSG_NODE_INFO:  return {true,  sizeof(PayloadNodeInfo)};
+         case MSG_LEAVE:      return {false, sizeof(PayloadLeave)};
+         default:             return {false, 0};
+     } // switch (msgType)
  } // getMessagePolicy()
  
  #endif // NAVIGA_PROTOCOL_H
