@@ -5,3 +5,7 @@
 *.swp
 *.bak
 .DS_Store
+# Временные и служебные файлы Google Drive
+.tmp.driveupload/
+.tmp.drivedownload/
+desktop.ini

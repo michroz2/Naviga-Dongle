@@ -1,12 +1,12 @@
 /**
  * File: NodeDatabase.cpp
- * Version: 1.3.1
+ * Version: 1.5  Изменение: Добавлено логирование при удалении устаревшего узла (cleanup).
  * Description: Реализация базы данных узлов.
- * Изменение: Приведение к новым правилам оформления (комментирование скобок).
  */
  #include "NodeDatabase.h"
+ #include "logger.h"
  #include <string.h>
- 
+
  NodeDatabase::NodeDatabase() {
      for (int i = 0; i < MAX_NODES; i++) {
          nodes[i].nodeId = i;
@@ -87,13 +87,16 @@
  } // NodeDatabase::removeNode()
  
  void NodeDatabase::cleanup() {
-     uint32_t now = millis();
-     for (int i = 1; i < MAX_NODES; i++) {
-         if (nodes[i].isActive && (now - nodes[i].lastSeen > NODE_TIMEOUT_MS)) {
-             nodes[i].isActive = false;
-         } // if (nodes[i].isActive && ...)
-     } // for (int i = 1; i < MAX_NODES; i++)
- } // NodeDatabase::cleanup()
+    uint32_t now = millis();
+    for (int i = 1; i < MAX_NODES; i++) {
+        if (nodes[i].isActive && (now - nodes[i].lastSeen > NODE_TIMEOUT_MS)) {
+            nodes[i].isActive = false;
+            
+            // Логируем существенное действие системы
+            LOG_INFO("ACTION", "Node %d (%s) deleted due to timeout", i, nodes[i].nodeName);
+        } // if (nodes[i].isActive && ...)
+    } // for (int i = 1; i < MAX_NODES; i++)
+} // NodeDatabase::cleanup()
  
  uint8_t NodeDatabase::getActiveNodesCount() const {
      uint8_t count = 0;

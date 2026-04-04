@@ -1,9 +1,8 @@
-/**
+/** Видишь?
  * Project: Naviga-Dongle (T-Beam v1.1 Custom E22 + Universal GPS)
  * File: main.cpp
- * Version: 1.4.1
+ * Version: 1.5  Изменение: Интеграция периодической очистки базы данных узлов (cleanup).
  * Description: Главный файл оркестратора.
- * Изменение: Внедрена роль (тип узла), комментирование закрывающих скобок.
  */
 
  #include <Arduino.h>
@@ -51,7 +50,7 @@
 
  uint32_t lastTxTime = 0;                               
  uint32_t lastGpsLogTime = 0;                           
- uint32_t lastCleanupTime = 0;                          
+ uint32_t lastCleanupTime = 0;      // Таймер для неблокирующей очистки БД                          
  bool isLonScaleSet = false;                            
 
  int getConnectionQuality(uint8_t targetId) {
@@ -193,6 +192,13 @@
  } // setup()
  
  void loop() {
+    // --- Очистка устаревших узлов (раз в 10 секунд) ---
+    uint32_t currentMillis = millis();
+    if (currentMillis - lastCleanupTime > 10000) {
+        nodeDB.cleanup();
+        lastCleanupTime = currentMillis;
+    } // if (currentMillis - lastCleanupTime > 10000)
+
      gps.update();
 
      if (receivedFlag) {

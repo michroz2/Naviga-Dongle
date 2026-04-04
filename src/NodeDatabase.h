@@ -1,8 +1,7 @@
 /**
  * File: NodeDatabase.h
- * Version: 1.3.1
+ * Version: 1.5  Изменение: Увеличено время таймаута узла до 3 часов по умолчанию.
  * Description: Заголовочный файл базы данных узлов.
- * Изменение: Приведение к новым правилам оформления (комментирование скобок).
  */
  #ifndef NODE_DATABASE_H
  #define NODE_DATABASE_H
@@ -11,7 +10,9 @@
  #include "NavigaProtocol.h"
  
  #define MAX_NODES 255
- #define NODE_TIMEOUT_MS 300000 
+
+ // Таймаут неактивности узла: 3 часа (3 * 60 * 60 * 1000 = 10800000 мс)
+ #define NODE_TIMEOUT_MS 10800000 
  
  struct NodeRecord {
      uint8_t nodeId;
