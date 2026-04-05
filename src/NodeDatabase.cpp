@@ -1,6 +1,6 @@
 /**
  * File: NodeDatabase.cpp
- * Version: 1.5  Изменение: Добавлено логирование при удалении устаревшего узла (cleanup).
+ * Version: 1.7 Изменение: Реализация метода isNodeActive.
  * Description: Реализация базы данных узлов.
  */
  #include "NodeDatabase.h"
@@ -40,7 +40,13 @@
      } // if (!nodes[nodeId].isActive)
      return &nodes[nodeId];
  } // NodeDatabase::getNode()
- 
+
+// Метод только для чтения статуса
+bool NodeDatabase::isNodeActive(uint8_t nodeId) const {
+    if (nodeId == 0 || nodeId >= MAX_NODES) return false;
+    return nodes[nodeId].isActive;
+} // NodeDatabase::isNodeActive()
+
  void NodeDatabase::updateNodeInfo(uint8_t nodeId, const char* name, uint8_t nodeType) {
      if (nodeId == 0 || nodeId >= MAX_NODES) return;
      getNode(nodeId);

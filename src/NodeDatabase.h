@@ -1,6 +1,6 @@
 /**
  * File: NodeDatabase.h
- * Version: 1.5  Изменение: Увеличено время таймаута узла до 3 часов по умолчанию.
+ * Version: 1.7 Изменение: Добавлен метод isNodeActive для проверки статуса без активации.
  * Description: Заголовочный файл базы данных узлов.
  */
  #ifndef NODE_DATABASE_H
@@ -29,10 +29,13 @@
  }; // struct NodeRecord
  
  class NodeDatabase {
- public:
-     NodeDatabase();
- 
+    public:
+        NodeDatabase();
+    
      const NodeRecord* getNode(uint8_t nodeId);
+        
+     bool isNodeActive(uint8_t nodeId) const;       // Безопасная проверка активности узла (без побочных эффектов)
+    
      void updateNodeCoords(uint8_t nodeId, float lat, float lon, uint32_t packed, bool updateTimer = true);
      void updateNodeInfo(uint8_t nodeId, const char* name, uint8_t nodeType);
      void updateNodeSNR(uint8_t nodeId, float snr);

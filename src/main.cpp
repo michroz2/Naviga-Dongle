@@ -1,7 +1,7 @@
 /** Видишь?
  * Project: Naviga-Dongle (T-Beam v1.1 Custom E22 + Universal GPS)
  * File: main.cpp
- * Version: 1.6 Изменение: Добавлен фоновый Heartbeat-таймер для периодической рассылки NodeInfo.
+ * Version: 1.7 Изменение: Реактивное Приветствие с джиттером (батчинг) при обнаружении нового узла.
  * Description: Главный файл оркестратора.
  */
 
@@ -272,8 +272,23 @@
                          LOG_INFO("LORA", "Valid pkt Type %d from Node %d (Relay: %d, Seq: %d, SNR: %.1f)", 
                                   rxHeader.getType(), rxHeader.senderId, rxHeader.relayId, rxHeader.msgSeq, currentSNR);
                          
-                         packetManager.processPacket(rxHeader, rxBuffer + sizeof(NavigaHeader));
-                         
+                            // НОВОЕ: 1. Проверяем, новый ли это узел (до его активации в базе)
+                            bool isNewNode = !nodeDB.isNodeActive(rxHeader.senderId);
+                                                    
+                            // 2. Штатная обработка пакета (здесь узел добавляется/обновляется)
+                            packetManager.processPacket(rxHeader, rxBuffer + sizeof(NavigaHeader));
+
+                            // НОВОЕ: 3. Реактивное Приветствие (батчинг ответов)
+                            if (isNewNode && rxHeader.senderId != myNodeId) {
+                                uint32_t currentMillis = millis();
+                                uint32_t jitterMs = random(120000, 300000); // От 2 до 5 минут (120000 - 300000 мс)
+                                // Безусловное "состаривание" таймера Heartbeat:
+                                // Сдвигаем lastHeartbeatTime так, чтобы до планового срабатывания осталось ровно jitterMs
+                                lastHeartbeatTime = currentMillis - HEARTBEAT_INTERVAL_MS + jitterMs;
+                                
+                                LOG_INFO("SYS", "New Node %d discovered! NodeInfo reply (batching) scheduled in %d sec", rxHeader.senderId, jitterMs / 1000);
+                            } // if (isNewNode && rxHeader.senderId != myNodeId)
+
                          if (router.shouldRetransmit(rxHeader)) {
                              txManager.enqueueRelay(rxHeader, rxBuffer + sizeof(NavigaHeader), payloadLen, currentSNR);
                          } // if (router.shouldRetransmit(...))
