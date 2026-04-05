@@ -1,6 +1,6 @@
 /**
  * File: TxManager.cpp
- * Version: 1.10 Изменение: Географическая маршрутизация - расчет джиттера на базе SNR.
+ * Version: 1.11 Изменение: Уменьшение TTL и перезапись relayId при постановке в очередь ретрансляции.
  * Description: Реализация TxManager.
  */
  #include "TxManager.h"
@@ -44,7 +44,7 @@
      txHeader.senderId = _myNodeId;
      txHeader.relayId = _myNodeId;
      txHeader.msgSeq = _myMsgSeq++;
-     txHeader.setTypeAndTTL(MSG_NODE_INFO, 15);
+     txHeader.setTypeAndTTL(MSG_NODE_INFO, DEFAULT_TTL);
  
      PayloadNodeInfo infoPayload;
      infoPayload.nodeType = nodeType; 
@@ -60,7 +60,7 @@
      txHeader.senderId = _myNodeId;
      txHeader.relayId = _myNodeId;
      txHeader.msgSeq = _myMsgSeq++;
-     txHeader.setTypeAndTTL(MSG_COORDS, 15);
+     txHeader.setTypeAndTTL(MSG_COORDS, DEFAULT_TTL);
  
      uint32_t packedCoords = _packer.pack(lat, lon);
      enqueue(txHeader, (const uint8_t*)&packedCoords, sizeof(uint32_t), priority, 0);
@@ -72,14 +72,21 @@
     for (uint8_t i = 0; i < TX_QUEUE_SIZE; i++) {
         if (!_queue[i].isActive) {
             _queue[i].header = header;
-            // Копирование payload...
-            if (payloadLen > 0) {
+            
+            // НОВОЕ: Логика времени жизни пакета (TTL)
+            uint8_t currentTTL = header.getTTL();
+            uint8_t newTTL = (currentTTL > 0) ? (currentTTL - 1) : 0;
+            _queue[i].header.setTypeAndTTL(header.getType(), newTTL);
+            
+            // НОВОЕ: Перезаписываем relayId на свой, так как теперь МЫ являемся ретранслятором
+            _queue[i].header.relayId = _myNodeId;
+
+            if (payloadLen > 0 && payload != nullptr) {
                 memcpy(_queue[i].payload, payload, payloadLen);
-            }
+            } // if (payloadLen > 0 && payload != nullptr)
+            
             _queue[i].payloadLen = payloadLen;
             _queue[i].priority = TX_RELAY;
-            
-            // НОВОЕ: Сохраняем SNR для расчета джиттера
             _queue[i].rxSnr = snr;
             
             _queue[i].isActive = true;
@@ -87,7 +94,7 @@
         } // if (!_queue[i].isActive)
     } // for (uint8_t i = 0; i < TX_QUEUE_SIZE; i++)
     return false;
- } // TxManager::enqueueRelay()
+} // TxManager::enqueueRelay()
 
  void TxManager::abortRelay(uint8_t senderId, uint8_t msgSeq) {
      for (uint8_t i = 0; i < TX_QUEUE_SIZE; i++) {

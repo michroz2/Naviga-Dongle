@@ -1,6 +1,6 @@
 /**
  * File: Retranslation.cpp
- * Version: 1.3.0
+ * Version: 1.11 Изменение: Внедрена логика ограничения ретрансляции по TTL.
  * Description: Реализация класса фильтрации эфира.
  */
  #include "Retranslation.h"
@@ -32,7 +32,15 @@
  } 
  
  bool Retranslation::shouldRetransmit(const NavigaHeader& header) const {
+    // НОВОЕ: Если TTL пакета исчерпан (остался 1 прыжок, который пакет только что совершил до нас),
+    // пакет считается доставленным, но ретранслировать его дальше нельзя.
+    if (header.getTTL() <= 1) {
+        LOG_INFO("RELAY", "Packet Seq %d dropped: TTL expired.", header.msgSeq);
+        return false;
+    } // if (header.getTTL() <= 1)
+
      MessagePolicy policy = getMessagePolicy(header.getType());
      if (!policy.isRoutable) return false;
-     return header.getTTL() > 1;
- }
+
+    return true; 
+ } // Retranslation::shouldRetransmit()
