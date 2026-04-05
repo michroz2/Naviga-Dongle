@@ -1,8 +1,7 @@
 /**
  * File: TxManager.cpp
- * Version: 1.2.0
+ * Version: 1.10 Изменение: Географическая маршрутизация - расчет джиттера на базе SNR.
  * Description: Реализация TxManager.
- * Изменение: Поддержка типа узла в методе sendNodeInfo и комментирование закрывающих скобок.
  */
  #include "TxManager.h"
  #include "logger.h"
@@ -68,20 +67,28 @@
  } // TxManager::sendCoords()
  
  bool TxManager::enqueueRelay(const NavigaHeader& header, const uint8_t* payload, size_t payloadLen, float snr) {
-     long snrConstrained = (long)snr;
-     if (snrConstrained < -11) snrConstrained = -11;
-     if (snrConstrained > 5) snrConstrained = 5;
- 
-     uint32_t baseDelay = map(snrConstrained, -11, 5, 100, 1000);
- 
-     NavigaHeader relayHeader = header;
-     relayHeader.setTypeAndTTL(static_cast<NavigaMessageType>(header.getType()), header.getTTL() - 1);
-     relayHeader.relayId = _myNodeId;
- 
-     LOG_INFO("QUEUE", "Pkt Seq %d (Relay) queued. SNR: %.1f -> Base Delay: %d ms", header.msgSeq, snr, baseDelay);
-     return enqueue(relayHeader, payload, payloadLen, TX_RELAY, baseDelay);
+    if (payloadLen > MAX_PAYLOAD_SIZE) return false;
+
+    for (uint8_t i = 0; i < TX_QUEUE_SIZE; i++) {
+        if (!_queue[i].isActive) {
+            _queue[i].header = header;
+            // Копирование payload...
+            if (payloadLen > 0) {
+                memcpy(_queue[i].payload, payload, payloadLen);
+            }
+            _queue[i].payloadLen = payloadLen;
+            _queue[i].priority = TX_RELAY;
+            
+            // НОВОЕ: Сохраняем SNR для расчета джиттера
+            _queue[i].rxSnr = snr;
+            
+            _queue[i].isActive = true;
+            return true;
+        } // if (!_queue[i].isActive)
+    } // for (uint8_t i = 0; i < TX_QUEUE_SIZE; i++)
+    return false;
  } // TxManager::enqueueRelay()
- 
+
  void TxManager::abortRelay(uint8_t senderId, uint8_t msgSeq) {
      for (uint8_t i = 0; i < TX_QUEUE_SIZE; i++) {
          if (_queue[i].isActive && _queue[i].header.senderId == senderId && _queue[i].header.msgSeq == msgSeq) {
@@ -121,11 +128,23 @@
              _jitterStartTime = now;
              
              switch(bestPriority) {
-                 case TX_CRITICAL: _jitterDelay = random(20, 50); break;
-                 case TX_HIGH:     _jitterDelay = random(50, 150); break;
-                 case TX_NORMAL:   _jitterDelay = random(100, 300); break;
-                 case TX_RELAY:    _jitterDelay = random(50, 200); break; 
-             } // switch(bestPriority)
+                case TX_CRITICAL: _jitterDelay = random(10, 50); break;
+                case TX_HIGH:     _jitterDelay = random(50, 150); break;
+                case TX_NORMAL:   _jitterDelay = random(100, 300); break;
+                
+                case TX_RELAY: {
+                    // НОВОЕ: Географическая маршрутизация (чем ХУЖЕ сигнал, тем КОРОЧЕ задержка)
+                    // Ограничиваем SNR разумными пределами LoRa: от -15 (край зоны) до +5 (рядом)
+                    long snrInt = constrain((long)_queue[_activeJobIndex].rxSnr, -15, 5);
+                    
+                    // Маппинг: -15 dB -> 100 мс (отвечаем первыми), +5 dB -> 1000 мс (ждем)
+                    uint32_t baseDelay = map(snrInt, -15, 5, 100, 1000);
+                    
+                    // Добавляем случайный разброс 0-50 мс для защиты от коллизий равных узлов
+                    _jitterDelay = baseDelay + random(0, 50); 
+                    break;
+                }
+            } // switch(bestPriority)
          } // if (bestIndex != -1)
      } // if (_activeJobIndex == -1)
  

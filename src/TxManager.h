@@ -1,8 +1,7 @@
 /**
  * File: TxManager.h
- * Version: 1.2.0
+ * Version: 1.10 Изменение: Добавлено поле rxSnr в TxJob для расчета джиттера при ретрансляции.
  * Description: Единый конвейер для отправки пакетов с поддержкой типа узла.
- * Изменение: Приведение к новым правилам оформления (комментирование скобок).
  */
  #ifndef TX_MANAGER_H
  #define TX_MANAGER_H
@@ -23,14 +22,15 @@
  const uint8_t MAX_PAYLOAD_SIZE = 16; 
  
  struct TxJob {
-     bool isActive;
-     TxPriority priority;
-     uint32_t readyTime; 
-     NavigaHeader header;
-     uint8_t payload[MAX_PAYLOAD_SIZE];
-     size_t payloadLen;
- }; // struct TxJob
- 
+    bool isActive;
+    TxPriority priority;
+    uint32_t readyTime; 
+    NavigaHeader header;
+    uint8_t payload[MAX_PAYLOAD_SIZE];
+    size_t payloadLen;
+    float rxSnr;            //Сохраняем SNR принятого пакета для расчета задержки ретрансляции
+ }; // struct TxJob 
+
  class TxManager {
  public:
      TxManager(RadioManager& radio, GeoPacker& packer, uint8_t& nodeId, uint8_t& msgSeq);
