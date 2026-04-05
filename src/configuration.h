@@ -1,4 +1,10 @@
-#ifndef CONFIGURATION_H
+/**
+ * File: configuration.h
+ * Version: 1.6 Изменение: Добавлен интервал для Heartbeat (отправка NodeInfo).
+ * Description: Конфигурация пинов и базовых настроек.
+ */
+ 
+ #ifndef CONFIGURATION_H
 #define CONFIGURATION_H
 
 #include <Arduino.h>
@@ -53,8 +59,11 @@
 #define GPS_RX      34  // Линия приема данных от GPS-модуля
 #define GPS_TX      12  // Линия передачи команд в GPS-модуль
 
-// --- НАСТРОЙКИ ПЕРИОДИЧНОСТИ ---
+// --- ТАЙМЕРЫ И ИНТЕРВАЛЫ ---
 const uint32_t txInterval = 10000;
 const uint32_t gpsUpdateInterval = 1000;
+
+#define CLEANUP_INTERVAL_MS 10000       // Интервал фоновой очистки Node db)
+#define HEARTBEAT_INTERVAL_MS 2700000   // Интервал фоновой отправки NodeInfo: 45 минут (45 * 60 * 1000 мс)
 
 #endif // CONFIGURATION_H

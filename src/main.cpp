@@ -1,7 +1,7 @@
 /** Видишь?
  * Project: Naviga-Dongle (T-Beam v1.1 Custom E22 + Universal GPS)
  * File: main.cpp
- * Version: 1.5  Изменение: Интеграция периодической очистки базы данных узлов (cleanup).
+ * Version: 1.6 Изменение: Добавлен фоновый Heartbeat-таймер для периодической рассылки NodeInfo.
  * Description: Главный файл оркестратора.
  */
 
@@ -51,6 +51,8 @@
  uint32_t lastTxTime = 0;                               
  uint32_t lastGpsLogTime = 0;                           
  uint32_t lastCleanupTime = 0;      // Таймер для неблокирующей очистки БД                          
+ uint32_t lastHeartbeatTime = 0;    // Таймер для фоновой рассылки NodeInfo
+
  bool isLonScaleSet = false;                            
 
  int getConnectionQuality(uint8_t targetId) {
@@ -192,12 +194,29 @@
  } // setup()
  
  void loop() {
+
     // --- Очистка устаревших узлов (раз в 10 секунд) ---
     uint32_t currentMillis = millis();
-    if (currentMillis - lastCleanupTime > 10000) {
+    if (currentMillis - lastCleanupTime > CLEANUP_INTERVAL_MS) {
         nodeDB.cleanup();
         lastCleanupTime = currentMillis;
     } // if (currentMillis - lastCleanupTime > 10000)
+
+    // --- Редкий фоновый пинг NodeInfo (Heartbeat) ---
+    if (currentMillis - lastHeartbeatTime > HEARTBEAT_INTERVAL_MS) {
+        if (myNodeId != 0) { // Отправляем только если ID уже проинициализирован
+            char currentName[12];
+            snprintf(currentName, sizeof(currentName), "Node-%d", myNodeId);
+            
+            // Отправляем пакет с приоритетом TX_NORMAL
+            txManager.sendNodeInfo(currentName, myNodeType, TX_NORMAL);
+            
+            // Логируем существенное действие системы
+            LOG_INFO("ACTION", "Heartbeat sent: NodeInfo (Name: %s, Type: %d)", currentName, myNodeType);
+        } // if (myNodeId != 0)
+        
+        lastHeartbeatTime = currentMillis;
+    } // if (currentMillis - lastHeartbeatTime > HEARTBEAT_INTERVAL_MS)
 
      gps.update();
 
