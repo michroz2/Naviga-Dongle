@@ -1,6 +1,6 @@
 /**
  * File: GpsManager.cpp
- * Version: 1.0.0
+ * Version: 1.8 Изменение: Реализация метода getSpeed().
  * Description: Реализация класса управления GPS.
  */
  #include "GpsManager.h"
@@ -78,6 +78,11 @@ bool GpsManager::isValid() { return tinyGps.location.isValid(); }
 float GpsManager::getLat() { return tinyGps.location.lat(); }
 float GpsManager::getLon() { return tinyGps.location.lng(); }
 uint32_t GpsManager::getSatellites() { return tinyGps.satellites.value(); }
+
+//Метод получения скорости
+float GpsManager::getSpeed() {
+    return tinyGps.speed.kmph();
+} // GpsManager::getSpeed()
 
 float GpsManager::distanceTo(float lat, float lon) {
     return TinyGPSPlus::distanceBetween(getLat(), getLon(), lat, lon);

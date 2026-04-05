@@ -1,9 +1,9 @@
 /**
  * File: GpsManager.h
- * Version: 1.0.0
+ * Version: 1.8 Изменение: Добавлен метод getSpeed() для адаптивной телеметрии.
  * Description: Изолированный класс для управления GPS-модулем.
  */
- #ifndef GPS_MANAGER_H
+  #ifndef GPS_MANAGER_H
  #define GPS_MANAGER_H
  
  #include <Arduino.h>
@@ -29,6 +29,7 @@
     float getLat();
     float getLon();
     uint32_t getSatellites();
+    float getSpeed();           //Получение аппаратной скорости (Доплер)
 
     // Вспомогательные функции для математики (БЕЗ const!)
     float distanceTo(float lat, float lon);

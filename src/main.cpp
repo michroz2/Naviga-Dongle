@@ -1,7 +1,8 @@
 /** Видишь?
  * Project: Naviga-Dongle (T-Beam v1.1 Custom E22 + Universal GPS)
  * File: main.cpp
- * Version: 1.7 Изменение: Реактивное Приветствие с джиттером (батчинг) при обнаружении нового узла.
+ * Version: 1.9 Изменение: Синхронизация логики handleCollision с адаптивной отправкой координат.
+ * Version: 1.8 Изменение: Внедрение адааптивной посылки координат.
  * Description: Главный файл оркестратора.
  */
 
@@ -79,27 +80,29 @@
  } // cycleGpsPowerCb()
 
  void handleCollision() {
-     uint8_t oldId = myNodeId;
-     nodeDB.removeNode(oldId); 
-     
-     randomSeed(esp_random());
-     do {
-         myNodeId = random(1, 255);
-     } while (nodeDB.getNode(myNodeId) != nullptr); // do-while
-     
-     LOG_WARN("COLLISION", "ID %d is taken! Switched to new ID: %d", oldId, myNodeId);
-     
-     myMsgSeq = 0; 
-     
-     if (gps.isValid()) {
-         nodeDB.updateNodeCoords(myNodeId, gps.getLat(), gps.getLon(), 0, false);
-     } // if (gps.isValid())
-     
-     char myName[12];
-     snprintf(myName, sizeof(myName), "Node-%d", myNodeId);
-     txManager.sendNodeInfo(myName, myNodeType, TX_CRITICAL);
-     
-     lastTxTime = millis() - txInterval + 2000; 
+    uint8_t oldId = myNodeId;
+    nodeDB.removeNode(oldId); 
+    
+    randomSeed(esp_random());
+    do {
+        myNodeId = random(1, 255);
+    } while (nodeDB.getNode(myNodeId) != nullptr); // do-while
+    
+    LOG_WARN("COLLISION", "ID %d is taken! Switched to new ID: %d", oldId, myNodeId);
+    
+    myMsgSeq = 0; 
+    
+    // Координаты в базу здесь больше не записываем. 
+    // Адаптивная логика в loop() сама увидит "новый" ID и отправит GPS-пакет через 5 секунд.
+    
+    char myName[12];
+    snprintf(myName, sizeof(myName), "Node-%d", myNodeId);
+    
+    // Отправляем критическое оповещение о смене имени
+    txManager.sendNodeInfo(myName, myNodeType, TX_CRITICAL);
+    
+    // Больше не трогаем lastTxTime вручную. 
+    // loop() сам отработает задержку TX_INTERVAL_MOVING (5 сек) перед посылкой координат.
  } // handleCollision()
 
  void scanNetworkForUniqueId() {
@@ -299,14 +302,42 @@
          radio.startReceive();
      } // if (receivedFlag)
 
-     if (millis() - lastTxTime >= txInterval) {
-         if (gps.isValid()) {
-             txManager.sendCoords(gps.getLat(), gps.getLon(), TX_HIGH);
-         } else {
-             LOG_WARN("TX", "Skip TX: GPS location not valid.");
-         } // if (gps.isValid())
-         lastTxTime = millis(); 
-     } // if (millis() - lastTxTime >= txInterval)
+    // --- АДАПТИВНАЯ ОТПРАВКА КООРДИНАТ ---
+    if (gps.isValid()) {
+        bool shouldTransmit = false;
+        const NodeRecord* myRecord = nodeDB.getNode(myNodeId);
+        
+        // Получаем дистанцию (рассчитанную в блоке экрана) и текущую скорость
+        float distFromLastTx = (myRecord != nullptr) ? myRecord->distance : 0.0f;
+        float currentSpeed = gps.getSpeed();
+        uint32_t now = millis();
+
+        // Гибридный фильтр движения
+        if (distFromLastTx > MIN_MOVEMENT_METERS && currentSpeed > MIN_SPEED_KMPH) {
+            shouldTransmit = true;
+        } else if (distFromLastTx > SNEAK_MOVEMENT_METERS) {
+            shouldTransmit = true;
+        } // if (distFromLastTx > ...)
+
+        // Принятие решения об отправке
+        if (shouldTransmit && (now - lastTxTime >= TX_INTERVAL_MOVING)) {
+            txManager.sendCoords(gps.getLat(), gps.getLon(), TX_HIGH);
+            nodeDB.updateNodeCoords(myNodeId, gps.getLat(), gps.getLon(), 0, false); // Сохраняем ТОЛЬКО при отправке
+            LOG_INFO("ACTION", "Adaptive TX (Moving): Dist: %.1fm, Speed: %.1fkm/h", distFromLastTx, currentSpeed);
+            lastTxTime = now;
+        } else if (now - lastTxTime >= TX_INTERVAL_STILL) {
+            txManager.sendCoords(gps.getLat(), gps.getLon(), TX_HIGH);
+            nodeDB.updateNodeCoords(myNodeId, gps.getLat(), gps.getLon(), 0, false);
+            LOG_INFO("ACTION", "Adaptive TX (Still Heartbeat)");
+            lastTxTime = now;
+        } // if (shouldTransmit && ...)
+    } else {
+        // Если нет FIX, просто сбрасываем таймер STILL, чтобы не спамить лог
+        if (millis() - lastTxTime >= TX_INTERVAL_STILL) {
+            LOG_WARN("TX", "Skip TX: GPS location not valid.");
+            lastTxTime = millis(); 
+        } // if (millis() - lastTxTime >= TX_INTERVAL_STILL)
+    } // if (gps.isValid())
 
      txManager.processQueue();
 

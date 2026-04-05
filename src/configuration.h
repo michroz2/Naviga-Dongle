@@ -1,6 +1,6 @@
 /**
  * File: configuration.h
- * Version: 1.6 Изменение: Добавлен интервал для Heartbeat (отправка NodeInfo).
+ * Version: 1.8 Изменение: Добавлены параметры адаптивной отправки координат.
  * Description: Конфигурация пинов и базовых настроек.
  */
  
@@ -65,5 +65,12 @@ const uint32_t gpsUpdateInterval = 1000;
 
 #define CLEANUP_INTERVAL_MS 10000       // Интервал фоновой очистки Node db)
 #define HEARTBEAT_INTERVAL_MS 2700000   // Интервал фоновой отправки NodeInfo: 45 минут (45 * 60 * 1000 мс)
+
+// --- НАСТРОЙКИ АДАПТИВНОЙ ОТПРАВКИ КООРДИНАТ ---
+#define MIN_MOVEMENT_METERS    15.0f  // Порог дистанции для фиксации движения (защита от дрейфа)
+#define MIN_SPEED_KMPH         2.0f   // Минимальная скорость для подтверждения движения (защита от дрейфа)
+#define SNEAK_MOVEMENT_METERS  40.0f  // Дистанция безусловной отправки (для медленного движения/крадущегося)
+#define TX_INTERVAL_MOVING     5000   // Максимальная частота отправки в движении (5 сек)
+#define TX_INTERVAL_STILL      300000 // Редкий пинг на стоянке (5 минут)
 
 #endif // CONFIGURATION_H
