@@ -81,13 +81,13 @@
 
  void handleCollision() {
     uint8_t oldId = myNodeId;
-    nodeDB.removeNode(oldId); 
     
     randomSeed(esp_random());
     do {
         myNodeId = random(1, 255);
     } while (nodeDB.getNode(myNodeId) != nullptr); // do-while
-    
+
+    nodeDB.removeNode(oldId); // Убрать старый ИД, который занят другим узлом. Далее он будет создан заново
     nodeDB.addNode(myNodeId); // Регистрируем новый собственный узел
     
     LOG_WARN("COLLISION", "ID %d is taken! Switched to new ID: %d", oldId, myNodeId);
@@ -272,18 +272,19 @@
                          handleCollision();
                      } // if (isCollision)
 
-                     if (rxHeader.relayId != myNodeId) {
-                         nodeDB.updateNodeSNR(rxHeader.relayId, currentSNR);
-                     } // if (rxHeader.relayId != myNodeId)
 
                      if (isOwnEcho) {
-                         // do nothing
+                        nodeDB.updateNodeSNR(rxHeader.relayId, currentSNR);  //Может быть, что узла relayId ещё нет в базе... 
+                        // do nothing
                      } else if (!router.isValidPacket(rxHeader.getType(), payloadLen)) {
                          LOG_WARN("LORA", "Invalid packet format/size! Type: %d, Len: %d", rxHeader.getType(), payloadLen);
                      } else if (router.isDuplicate(rxHeader.senderId, rxHeader.msgSeq)) {
                          LOG_WARN("LORA", "Duplicate pkt Node %d Seq %d dropped.", rxHeader.senderId, rxHeader.msgSeq);
+                         nodeDB.updateNodeSNR(rxHeader.relayId, currentSNR);  //Может быть, что узла relayId ещё нет в базе... 
+
                          txManager.abortRelay(rxHeader.senderId, rxHeader.msgSeq);
-                     } else {
+
+                        } else {
                          LOG_INFO("LORA", "Valid pkt Type %d from Node %d (Relay: %d, Seq: %d, SNR: %.1f)", 
                                   rxHeader.getType(), rxHeader.senderId, rxHeader.relayId, rxHeader.msgSeq, currentSNR);
                          
@@ -294,7 +295,7 @@
                             packetManager.processPacket(rxHeader, rxBuffer + sizeof(NavigaHeader));
 
                             // НОВОЕ: 3. Реактивное Приветствие (батчинг ответов)
-                            if (isNewNode && rxHeader.senderId != myNodeId) {
+                            if (isNewNode) {
                                 uint32_t currentMillis = millis();
                                 uint32_t jitterMs = random(MIN_GREETING_NODEINFO_JITTER, MAX_GREETING_NODEINFO_JITTER); // От 2 до 5 минут (120000 - 300000 мс)
                                 // Безусловное "состаривание" таймера Heartbeat:
