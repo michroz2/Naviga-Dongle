@@ -1,14 +1,17 @@
 /**
  * File: NodeDatabase.cpp
- * Version: 1.7 Изменение: Реализация метода isNodeActive.
+ * Version: 1.12 Изменение: Поддержание счетчика узлов на лету и функция updateTopology.
  * Description: Реализация базы данных узлов.
  */
  #include "NodeDatabase.h"
- #include "logger.h"
- #include <string.h>
-
+#include "logger.h"
+#include "configuration.h"
+#include <string.h>
+ 
  NodeDatabase::NodeDatabase() {
-     for (int i = 0; i < MAX_NODES; i++) {
+    _activeNodesCount = 0;
+    _cachedMaxDist = 0.0f;
+    for (int i = 0; i < MAX_NODES; i++) {
          nodes[i].nodeId = i;
          nodes[i].isActive = false;
          nodes[i].lastSeen = 0;
@@ -36,6 +39,7 @@
          nodes[nodeId].distance = 0.0f;
          nodes[nodeId].azimuth = 0.0f;
          nodes[nodeId].type = NODE_STALKER;
+         _activeNodesCount++;            // НОВОЕ: Увеличиваем счетчик при активации
          snprintf(nodes[nodeId].nodeName, sizeof(nodes[nodeId].nodeName), "Node-%d", nodeId);
      } // if (!nodes[nodeId].isActive)
      return &nodes[nodeId];
@@ -90,24 +94,48 @@ bool NodeDatabase::isNodeActive(uint8_t nodeId) const {
  void NodeDatabase::removeNode(uint8_t nodeId) {
      if (nodeId == 0 || nodeId >= MAX_NODES) return;
      nodes[nodeId].isActive = false;
- } // NodeDatabase::removeNode()
+     if (_activeNodesCount > 0) _activeNodesCount--; // НОВОЕ: Уменьшаем счетчик при удалении
+    } // NodeDatabase::removeNode()
  
- void NodeDatabase::cleanup() {
-    uint32_t now = millis();
+    void NodeDatabase::cleanup() {
+        uint32_t currentMillis = millis();
+        for (int i = 1; i < MAX_NODES; i++) {
+            if (nodes[i].isActive && (currentMillis - nodes[i].lastSeen > NODE_TIMEOUT_MS)) {
+                nodes[i].isActive = false;
+                // НОВОЕ: Уменьшаем счетчик при очистке по таймауту
+                if (_activeNodesCount > 0) _activeNodesCount--;
+                LOG_INFO("SYS", "Node %d removed by timeout", i);
+            }
+        }
+    } // NodeDatabase::cleanup()
+ 
+// --- Быстрые геттеры из кэша (O(1)) ---
+
+uint8_t NodeDatabase::getActiveNodesCount() const {
+    return _activeNodesCount;
+}
+
+float NodeDatabase::getCachedMaxDist() const {
+    return _cachedMaxDist;
+}
+
+// НОВОЕ: Фоновая синхронизация и сбор географии
+void NodeDatabase::updateTopology() {
+    uint8_t count = 0;
+    float maxD = 0.0f;
+
     for (int i = 1; i < MAX_NODES; i++) {
-        if (nodes[i].isActive && (now - nodes[i].lastSeen > NODE_TIMEOUT_MS)) {
-            nodes[i].isActive = false;
-            
-            // Логируем существенное действие системы
-            LOG_INFO("ACTION", "Node %d (%s) deleted due to timeout", i, nodes[i].nodeName);
-        } // if (nodes[i].isActive && ...)
-    } // for (int i = 1; i < MAX_NODES; i++)
-} // NodeDatabase::cleanup()
- 
- uint8_t NodeDatabase::getActiveNodesCount() const {
-     uint8_t count = 0;
-     for (int i = 1; i < MAX_NODES; i++) {
-         if (nodes[i].isActive) count++;
-     } // for (int i = 1; i < MAX_NODES; i++)
-     return count;
- } // NodeDatabase::getActiveNodesCount()
+        if (nodes[i].isActive) {
+            count++;
+            if (nodes[i].distance > maxD) {
+                maxD = nodes[i].distance;
+            }
+        }
+    }
+    
+    // Синхронизируем счетчик (лечение возможных расхождений)
+    _activeNodesCount = count;
+    _cachedMaxDist = maxD;
+    
+    LOG_INFO("SYS", "Topology sync: Nodes: %d, MaxDist: %.1fm", _activeNodesCount, _cachedMaxDist);
+}

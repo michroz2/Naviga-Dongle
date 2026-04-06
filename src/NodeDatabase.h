@@ -1,6 +1,6 @@
 /**
  * File: NodeDatabase.h
- * Version: 1.7 Изменение: Добавлен метод isNodeActive для проверки статуса без активации.
+ * Version: 1.12 Изменение: Добавлено кэширование метрик топологии.
  * Description: Заголовочный файл базы данных узлов.
  */
  #ifndef NODE_DATABASE_H
@@ -44,9 +44,17 @@
      void removeNode(uint8_t nodeId);
      void cleanup();
      uint8_t getActiveNodesCount() const;
- 
+    // Методы топологии
+    void updateTopology();
+    float getCachedMaxDist() const;
+    
  private:
      NodeRecord nodes[MAX_NODES];
+
+     // НОВОЕ: Кэшированные значения
+    uint8_t _activeNodesCount;
+    float _cachedMaxDist;
+    
  }; // class NodeDatabase
  
  #endif // NODE_DATABASE_H

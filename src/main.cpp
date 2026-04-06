@@ -53,6 +53,7 @@
  uint32_t lastGpsLogTime = 0;                           
  uint32_t lastCleanupTime = 0;      // Таймер для неблокирующей очистки БД                          
  uint32_t lastHeartbeatTime = 0;    // Таймер для фоновой рассылки NodeInfo
+ uint32_t lastTopologyUpdateTime = 0;
 
  bool isLonScaleSet = false;                            
 
@@ -200,6 +201,14 @@
 
     // --- Очистка устаревших узлов (раз в 10 секунд) ---
     uint32_t currentMillis = millis();
+
+    // --- Обновление топологии по таймеру ---
+    if (currentMillis - lastTopologyUpdateTime > TOPOLOGY_UPDATE_INTERVAL_MS) {
+        nodeDB.updateTopology();
+        lastTopologyUpdateTime = currentMillis;
+    }
+
+    // --- Cleanup базы по таймеру ---
     if (currentMillis - lastCleanupTime > CLEANUP_INTERVAL_MS) {
         nodeDB.cleanup();
         lastCleanupTime = currentMillis;
@@ -284,7 +293,7 @@
                             // НОВОЕ: 3. Реактивное Приветствие (батчинг ответов)
                             if (isNewNode && rxHeader.senderId != myNodeId) {
                                 uint32_t currentMillis = millis();
-                                uint32_t jitterMs = random(120000, 300000); // От 2 до 5 минут (120000 - 300000 мс)
+                                uint32_t jitterMs = random(MIN_GREETING_NODEINFO_JITTER, MAX_GREETING_NODEINFO_JITTER); // От 2 до 5 минут (120000 - 300000 мс)
                                 // Безусловное "состаривание" таймера Heartbeat:
                                 // Сдвигаем lastHeartbeatTime так, чтобы до планового срабатывания осталось ровно jitterMs
                                 lastHeartbeatTime = currentMillis - HEARTBEAT_INTERVAL_MS + jitterMs;
@@ -292,7 +301,7 @@
                                 LOG_INFO("SYS", "New Node %d discovered! NodeInfo reply (batching) scheduled in %d sec", rxHeader.senderId, jitterMs / 1000);
                             } // if (isNewNode && rxHeader.senderId != myNodeId)
 
-                         if (router.shouldRetransmit(rxHeader)) {
+                         if (router.shouldRetransmit(rxHeader, nodeDB)) {
                              txManager.enqueueRelay(rxHeader, rxBuffer + sizeof(NavigaHeader), payloadLen, currentSNR);
                          } // if (router.shouldRetransmit(...))
                      } // if (isOwnEcho)

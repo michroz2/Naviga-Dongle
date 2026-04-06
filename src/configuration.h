@@ -1,6 +1,6 @@
 /**
  * File: configuration.h
- * Version: 1.11 Изменение: Добавлен параметр DEFAULT_TTL для ограничения ретрансляции.
+ * Version: 1.12 Изменение: Добавлен таймаут кэширования топологии и порог плотности группы.
  * Description: Конфигурация пинов и базовых настроек.
  */
  
@@ -65,6 +65,8 @@ const uint32_t gpsUpdateInterval = 1000;
 
 #define CLEANUP_INTERVAL_MS 10000       // Интервал фоновой очистки Node db)
 #define HEARTBEAT_INTERVAL_MS 2700000   // Интервал фоновой отправки NodeInfo: 45 минут (45 * 60 * 1000 мс)
+#define MIN_GREETING_NODEINFO_JITTER 120000
+#define MAX_GREETING_NODEINFO_JITTER 300000
 
 // --- НАСТРОЙКИ АДАПТИВНОЙ ОТПРАВКИ КООРДИНАТ ---
 #define MIN_MOVEMENT_METERS    15.0f  // Порог дистанции для фиксации движения (защита от дрейфа)
@@ -75,5 +77,7 @@ const uint32_t gpsUpdateInterval = 1000;
 
 // --- НАСТРОЙКИ СЕТИ ---
 #define DEFAULT_TTL 3 // Максимальное количество ретрансляций (прыжков) для одного пакета
+#define MAX_DIRECT_CONNECT_METERS 200.0f 
+#define TOPOLOGY_UPDATE_INTERVAL_MS 15000 // Интервал пересчета топологии (15 сек)
 
 #endif // CONFIGURATION_H
