@@ -1,8 +1,7 @@
 /**
  * File: PacketManager.cpp
- * Version: 1.1.1
+ * Version: 1.14 Изменение: Использование связки isNodeActive и addNode вместо getOrCreateNode.
  * Description: Реализация диспетчера пакетов.
- * Изменение: Приведение к новым правилам оформления (комментирование скобок).
  */
  #include "PacketManager.h"
  #include "logger.h"
@@ -54,6 +53,11 @@
  } // PacketManager::handleLeavePacket()
  
  void PacketManager::processPacket(const NavigaHeader& header, const uint8_t* payload) {
+     // Уверены, что получили валидный пакет. Проверяем и явно добавляем узел, если его нет.
+     if (!_nodeDB.isNodeActive(header.senderId)) {
+         _nodeDB.addNode(header.senderId);
+     }
+
      switch(header.getType()) {
          case MSG_COORDS:
              handleCoordsPacket(header.senderId, payload);

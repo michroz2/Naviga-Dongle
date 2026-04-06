@@ -1,8 +1,7 @@
-/** Видишь?
+/**
  * Project: Naviga-Dongle (T-Beam v1.1 Custom E22 + Universal GPS)
  * File: main.cpp
- * Version: 1.9 Изменение: Синхронизация логики handleCollision с адаптивной отправкой координат.
- * Version: 1.8 Изменение: Внедрение адааптивной посылки координат.
+ * Version: 1.14 Изменение: Регистрация собственного узла myNodeId через addNode в setup и handleCollision.
  * Description: Главный файл оркестратора.
  */
 
@@ -89,6 +88,8 @@
         myNodeId = random(1, 255);
     } while (nodeDB.getNode(myNodeId) != nullptr); // do-while
     
+    nodeDB.addNode(myNodeId); // Регистрируем новый собственный узел
+    
     LOG_WARN("COLLISION", "ID %d is taken! Switched to new ID: %d", oldId, myNodeId);
     
     myMsgSeq = 0; 
@@ -158,6 +159,8 @@
      do {
          myNodeId = random(1, 255);
      } while (nodeDB.getNode(myNodeId) != nullptr); // do-while
+     
+     nodeDB.addNode(myNodeId); // Регистрируем наш начальный собственный узел
      
      LOG_INFO("SYS", "Scan complete. Selected unique Node ID: %d", myNodeId);
      display.showStatus("Scan Complete", "My new ID:", String(myNodeId), "Starting...");

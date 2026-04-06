@@ -1,6 +1,6 @@
 /**
  * File: NodeDatabase.h
- * Version: 1.12 Изменение: Добавлено кэширование метрик топологии.
+ * Version: 1.14 Изменение: Внедрение явного метода addNode вместо getOrCreateNode. Убран friend class.
  * Description: Заголовочный файл базы данных узлов.
  */
  #ifndef NODE_DATABASE_H
@@ -35,6 +35,8 @@
      const NodeRecord* getNode(uint8_t nodeId);
         
      bool isNodeActive(uint8_t nodeId) const;       // Безопасная проверка активности узла (без побочных эффектов)
+    
+     void addNode(uint8_t nodeId);                  // Явное добавление (инициализация) узла
     
      void updateNodeCoords(uint8_t nodeId, float lat, float lon, uint32_t packed, bool updateTimer = true);
      void updateNodeInfo(uint8_t nodeId, const char* name, uint8_t nodeType);
