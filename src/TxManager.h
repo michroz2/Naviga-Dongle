@@ -1,6 +1,6 @@
 /**
  * File: TxManager.h
- * Version: 1.10 Изменение: Добавлено поле rxSnr в TxJob для расчета джиттера при ретрансляции.
+ * Version: 1.19 Изменение: Удален rxSnr, enqueueRelay теперь принимает готовый delayMs (Шаг 2).
  * Description: Единый конвейер для отправки пакетов с поддержкой типа узла.
  */
  #ifndef TX_MANAGER_H
@@ -22,15 +22,15 @@
  const uint8_t MAX_PAYLOAD_SIZE = 16; 
  
  struct TxJob {
-    bool isActive;
-    TxPriority priority;
-    uint32_t readyTime; 
-    NavigaHeader header;
-    uint8_t payload[MAX_PAYLOAD_SIZE];
-    size_t payloadLen;
-    float rxSnr;            //Сохраняем SNR принятого пакета для расчета задержки ретрансляции
+     bool isActive;
+     TxPriority priority;
+     uint32_t readyTime; 
+     NavigaHeader header;
+     uint8_t payload[MAX_PAYLOAD_SIZE];
+     size_t payloadLen;
+     // Поле rxSnr удалено, так как задержка теперь рассчитывается до помещения в очередь
  }; // struct TxJob 
-
+ 
  class TxManager {
  public:
      TxManager(RadioManager& radio, GeoPacker& packer, uint8_t& nodeId, uint8_t& msgSeq);
@@ -38,7 +38,8 @@
      void sendNodeInfo(const char* nodeName, uint8_t nodeType, TxPriority priority = TX_NORMAL);
      void sendCoords(float lat, float lon, TxPriority priority = TX_HIGH);
      
-     bool enqueueRelay(const NavigaHeader& header, const uint8_t* payload, size_t payloadLen, float snr);
+     // ИЗМЕНЕНИЕ 1.19: Заменен float snr на uint32_t delayMs
+     bool enqueueRelay(const NavigaHeader& header, const uint8_t* payload, size_t payloadLen, uint32_t delayMs);
      void abortRelay(uint8_t senderId, uint8_t msgSeq);
      void processQueue();
  

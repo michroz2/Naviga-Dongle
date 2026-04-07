@@ -1,6 +1,6 @@
 /**
  * File: TxManager.cpp
- * Version: 1.11 Изменение: Уменьшение TTL и перезапись relayId при постановке в очередь ретрансляции.
+ * Version: 1.19 Изменение: Делегирование расчета джиттера внешнему коду при ретрансляции (Шаг 2).
  * Description: Реализация TxManager.
  */
  #include "TxManager.h"
@@ -66,36 +66,37 @@
      enqueue(txHeader, (const uint8_t*)&packedCoords, sizeof(uint32_t), priority, 0);
  } // TxManager::sendCoords()
  
- bool TxManager::enqueueRelay(const NavigaHeader& header, const uint8_t* payload, size_t payloadLen, float snr) {
-    if (payloadLen > MAX_PAYLOAD_SIZE) return false;
-
-    for (uint8_t i = 0; i < TX_QUEUE_SIZE; i++) {
-        if (!_queue[i].isActive) {
-            _queue[i].header = header;
-            
-            // НОВОЕ: Логика времени жизни пакета (TTL)
-            uint8_t currentTTL = header.getTTL();
-            uint8_t newTTL = (currentTTL > 0) ? (currentTTL - 1) : 0;
-            _queue[i].header.setTypeAndTTL(header.getType(), newTTL);
-            
-            // НОВОЕ: Перезаписываем relayId на свой, так как теперь МЫ являемся ретранслятором
-            _queue[i].header.relayId = _myNodeId;
-
-            if (payloadLen > 0 && payload != nullptr) {
-                memcpy(_queue[i].payload, payload, payloadLen);
-            } // if (payloadLen > 0 && payload != nullptr)
-            
-            _queue[i].payloadLen = payloadLen;
-            _queue[i].priority = TX_RELAY;
-            _queue[i].rxSnr = snr;
-            
-            _queue[i].isActive = true;
-            return true;
-        } // if (!_queue[i].isActive)
-    } // for (uint8_t i = 0; i < TX_QUEUE_SIZE; i++)
-    return false;
-} // TxManager::enqueueRelay()
-
+ // ИЗМЕНЕНИЕ 1.19: Принимаем готовый delayMs вместо snr
+ bool TxManager::enqueueRelay(const NavigaHeader& header, const uint8_t* payload, size_t payloadLen, uint32_t delayMs) {
+     if (payloadLen > MAX_PAYLOAD_SIZE) return false;
+ 
+     for (uint8_t i = 0; i < TX_QUEUE_SIZE; i++) {
+         if (!_queue[i].isActive) {
+             _queue[i].header = header;
+             
+             uint8_t currentTTL = header.getTTL();
+             uint8_t newTTL = (currentTTL > 0) ? (currentTTL - 1) : 0;
+             _queue[i].header.setTypeAndTTL(header.getType(), newTTL);
+             
+             _queue[i].header.relayId = _myNodeId;
+ 
+             if (payloadLen > 0 && payload != nullptr) {
+                 memcpy(_queue[i].payload, payload, payloadLen);
+             } // if (payloadLen > 0 && payload != nullptr)
+             
+             _queue[i].payloadLen = payloadLen;
+             _queue[i].priority = TX_RELAY;
+             
+             // Задержка теперь сразу прибавляется к времени готовности задачи
+             _queue[i].readyTime = millis() + delayMs;
+             
+             _queue[i].isActive = true;
+             return true;
+         } // if (!_queue[i].isActive)
+     } // for (uint8_t i = 0; i < TX_QUEUE_SIZE; i++)
+     return false;
+ } // TxManager::enqueueRelay()
+ 
  void TxManager::abortRelay(uint8_t senderId, uint8_t msgSeq) {
      for (uint8_t i = 0; i < TX_QUEUE_SIZE; i++) {
          if (_queue[i].isActive && _queue[i].header.senderId == senderId && _queue[i].header.msgSeq == msgSeq) {
@@ -138,17 +139,10 @@
                 case TX_CRITICAL: _jitterDelay = random(10, 50); break;
                 case TX_HIGH:     _jitterDelay = random(50, 150); break;
                 case TX_NORMAL:   _jitterDelay = random(100, 300); break;
-                
                 case TX_RELAY: {
-                    // НОВОЕ: Географическая маршрутизация (чем ХУЖЕ сигнал, тем КОРОЧЕ задержка)
-                    // Ограничиваем SNR разумными пределами LoRa: от -15 (край зоны) до +5 (рядом)
-                    long snrInt = constrain((long)_queue[_activeJobIndex].rxSnr, -15, 5);
-                    
-                    // Маппинг: -15 dB -> 100 мс (отвечаем первыми), +5 dB -> 1000 мс (ждем)
-                    uint32_t baseDelay = map(snrInt, -15, 5, 100, 1000);
-                    
-                    // Добавляем случайный разброс 0-50 мс для защиты от коллизий равных узлов
-                    _jitterDelay = baseDelay + random(0, 50); 
+                    // ИЗМЕНЕНИЕ 1.19: Джиттер уже был учтен в readyTime при помещении в очередь.
+                    // Ставим 0, чтобы передача сработала немедленно при выборе задачи.
+                    _jitterDelay = 0; 
                     break;
                 }
             } // switch(bestPriority)

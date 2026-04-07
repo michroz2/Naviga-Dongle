@@ -1,7 +1,7 @@
 /**
  * Project: Naviga-Dongle (T-Beam v1.1 Custom E22 + Universal GPS)
  * File: main.cpp
- * Version: 1.18 Изменение: Ролевая оптимизация CPU и фикс паразитной записи своих координат.
+ * Version: 1.19 Изменение: Единый вычислитель джиттера и активация статических координат (Шаг 2).
  * Description: Главный файл оркестратора.
  */
 
@@ -20,15 +20,15 @@
  #include "PowerManager.h"     
  #include "PacketManager.h"    
  #include "TxManager.h"        
-
+ 
  // --- НАСТРОЙКИ СКАНИРОВАНИЯ ---
  uint32_t networkScanDuration = 30000; 
  #define RED_LED_PIN 4                 
-
+ 
  uint8_t myNodeId = 0; 
  uint8_t myMsgSeq = 0;
- uint8_t myNodeType = NODE_STALKER; 
-
+ uint8_t myNodeType = NODE_RELAY; // Для тестирования включена роль Ретранслятора
+ 
  PowerManager power;                                      
  DisplayManager display(0x3c, I2C_SDA, I2C_SCL); 
  GpsManager gps;                                       
@@ -38,47 +38,73 @@
  Retranslation router;                                  
  PacketManager packetManager(nodeDB, gps, packer);
  TxManager txManager(radio, packer, myNodeId, myMsgSeq);
-
+ 
  volatile bool receivedFlag = false;                    
-
+ 
  #if defined(ESP8266) || defined(ESP32)
    ICACHE_RAM_ATTR
  #endif
  void setFlag(void) {
      receivedFlag = true;
  } 
-
+ 
  uint32_t lastTxTime = 0;                               
  uint32_t lastGpsLogTime = 0;                           
  uint32_t lastCleanupTime = 0;                                
  uint32_t lastHeartbeatTime = 0;    
  uint32_t lastTopologyUpdateTime = 0;
-
+ 
  bool isLonScaleSet = false;                            
-
+ 
+ // ИЗМЕНЕНИЕ 1.19: Единый вычислитель Джиттера с учетом ролей
+ uint32_t calculateRelayJitter(uint8_t myRole, uint8_t senderRole, float snr) {
+     uint32_t minMs, maxMs;
+     
+     if (myRole == NODE_RELAY) {
+         minMs = RELAY_JITTER_MIN_MS;
+         maxMs = RELAY_JITTER_MAX_MS;
+     } else {
+         minMs = STALKER_JITTER_MIN_MS;
+         maxMs = STALKER_JITTER_MAX_MS;
+     }
+ 
+     // VIP-пакет (от Трекера): сдвигаем окно вниз (делим MAX пополам)
+     if (senderRole == NODE_TRACKER) {
+         maxMs /= 2;
+         if (maxMs < minMs) maxMs = minMs; // Защита от пересечения границ
+     }
+ 
+     // Картографирование SNR (от -15 до 5) на выбранный диапазон
+     long snrInt = constrain((long)snr, -15, 5);
+     uint32_t baseDelay = map(snrInt, -15, 5, minMs, maxMs);
+     
+     // Добавляем случайный разброс 0-50 мс для защиты от коллизий равных узлов
+     return baseDelay + random(0, 50);
+ }
+ 
  int getConnectionQuality(uint8_t targetId) {
      if (targetId == myNodeId) return 10; 
-
+ 
      const NodeRecord* target = nodeDB.getNode(targetId);
      if (target == nullptr || targetId == 0) return 0;
      if (millis() - target->lastSeen > 30000) return 0;
      
      if (target->snr <= -99.0f) return 0; 
-
+ 
      int q = map((long)target->snr, -11, 5, 1, 10);
      if (q < 1) q = 1;
      if (q > 10) q = 10;
      return q;
  } 
-
+ 
  void updateScreenCb(String line1, String line2, String line3, String line4) {
      display.showStatus(line1, line2, line3, line4);
  } 
-
+ 
  void cycleGpsPowerCb() {
      power.cycleGpsPower();
  } 
-
+ 
  void handleCollision() {
     uint8_t oldId = myNodeId;
     nodeDB.removeNode(oldId); 
@@ -100,7 +126,7 @@
     txManager.sendNodeInfo(myName, myNodeType, TX_CRITICAL);
     nodeDB.updateNodeInfo(myNodeId, myName, myNodeType); 
  } 
-
+ 
  void scanNetworkForUniqueId() {
      LOG_INFO("SYS", "Starting network scan for %d ms...", networkScanDuration);
      
@@ -160,7 +186,7 @@
      display.showStatus("Scan Complete", "My new ID:", String(myNodeId), "Starting...");
      delay(2000);
  } 
-
+ 
  void setup() {
      delay(500); 
      Serial.begin(115200);
@@ -179,12 +205,17 @@
      display.showLogo();
      gps.init(updateScreenCb, cycleGpsPowerCb); 
      
+     // ИЗМЕНЕНИЕ 1.19: Передача статических координат при загрузке Ретранслятора
+     if (myNodeType == NODE_RELAY) {
+         gps.setStaticLocation(RELAY_STATIC_LAT, RELAY_STATIC_LON);
+     }
+ 
      display.showStatus("System Init...", "GPS Init Done", "Init LoRa...", "");
      if (!radio.init(setFlag)) {
          display.showStatus("ERROR", "LoRa Init Failed", "Check Logs", "");
          delay(3000);
      } 
-
+ 
      scanNetworkForUniqueId();
      
      char myName[12];
@@ -198,11 +229,9 @@
  void loop() {
     uint32_t currentMillis = millis();
     float currentSpeed = gps.getSpeed();
-
-    // Флаг для отключения тяжелой математики, если Трекер бежит
+ 
     bool isFastTracker = (myNodeType == NODE_TRACKER && currentSpeed > TRACKER_FAST_SPEED_KMPH);
-
-    // --- Обновление топологии по таймеру ---
+ 
     if (gps.isValid() && (currentMillis - lastTopologyUpdateTime > TOPOLOGY_UPDATE_INTERVAL_MS)) {
         if (isFastTracker) {
             LOG_INFO("SYS", "Topology sync skipped: Tracker is running.");
@@ -211,12 +240,12 @@
         }
         lastTopologyUpdateTime = currentMillis;
     }
-
+ 
     if (currentMillis - lastCleanupTime > CLEANUP_INTERVAL_MS) {
         nodeDB.cleanup(myNodeId);
         lastCleanupTime = currentMillis;
     } 
-
+ 
     if (currentMillis - lastHeartbeatTime > HEARTBEAT_INTERVAL_MS) {
         if (myNodeId != 0) { 
             char currentName[12];
@@ -227,9 +256,9 @@
         } 
         lastHeartbeatTime = currentMillis;
     } 
-
+ 
      gps.update();
-
+ 
      if (receivedFlag) {
          noInterrupts(); receivedFlag = false; interrupts();
          
@@ -248,7 +277,7 @@
                      
                      bool isCollision = false;
                      bool isOwnEcho = false;
-
+ 
                      if (rxHeader.relayId == myNodeId) {
                          isCollision = true;
                          LOG_WARN("LORA", "Collision Type 1: Relay ID == myNodeId!");
@@ -262,22 +291,21 @@
                              isOwnEcho = true;
                          } 
                      } 
-
+ 
                      if (isCollision) {
                          handleCollision();
                      } 
-
+ 
                      if (rxHeader.relayId != myNodeId) {
                          nodeDB.updateNodeSNR(rxHeader.relayId, currentSNR);
                      } 
-
+ 
                      if (isOwnEcho) {
                          // do nothing
                      } else if (!router.isValidPacket(rxHeader.getType(), payloadLen)) {
                          LOG_WARN("LORA", "Invalid packet format/size! Type: %d, Len: %d", rxHeader.getType(), payloadLen);
                      } else if (router.isDuplicate(rxHeader.senderId, rxHeader.msgSeq)) {
                          
-                         // Умная отмена ретрансляции на основе векторов
                          if (!nodeDB.hasNodesInOppositeDirection(rxHeader.relayId)) {
                              LOG_INFO("QUEUE", "Relayer %d has no opposite nodes. Aborting our relay job for Seq %d.", rxHeader.relayId, rxHeader.msgSeq);
                              txManager.abortRelay(rxHeader.senderId, rxHeader.msgSeq);
@@ -291,17 +319,24 @@
                          
                             bool isNewNode = !nodeDB.isNodeActive(rxHeader.senderId);
                             packetManager.processPacket(rxHeader, rxBuffer + sizeof(NavigaHeader));
-
+ 
                             if (isNewNode && rxHeader.senderId != myNodeId) {
                                 uint32_t currentMillis = millis();
                                 uint32_t jitterMs = random(MIN_GREETING_NODEINFO_JITTER, MAX_GREETING_NODEINFO_JITTER); 
                                 lastHeartbeatTime = currentMillis - HEARTBEAT_INTERVAL_MS + jitterMs;
                                 LOG_INFO("SYS", "New Node %d discovered! NodeInfo reply (batching) scheduled in %d sec", rxHeader.senderId, jitterMs / 1000);
                             } 
-
-                         // ИЗМЕНЕНИЕ 1.18: Передача текущей скорости и роли для ролевого фильтра
+ 
                          if (router.shouldRetransmit(rxHeader, nodeDB, myNodeType, currentSpeed)) {
-                             txManager.enqueueRelay(rxHeader, rxBuffer + sizeof(NavigaHeader), payloadLen, currentSNR);
+                             // ИЗМЕНЕНИЕ 1.19: Извлечение роли отправителя и расчет джиттера до помещения в очередь
+                             uint8_t senderRole = NODE_STALKER; // Значение по умолчанию
+                             const NodeRecord* senderNode = nodeDB.getNode(rxHeader.senderId);
+                             if (senderNode != nullptr) {
+                                 senderRole = senderNode->type;
+                             }
+                             
+                             uint32_t calculatedJitter = calculateRelayJitter(myNodeType, senderRole, currentSNR);
+                             txManager.enqueueRelay(rxHeader, rxBuffer + sizeof(NavigaHeader), payloadLen, calculatedJitter);
                          } 
                      } 
                  } 
@@ -309,20 +344,20 @@
          } 
          radio.startReceive();
      } 
-
+ 
     if (gps.isValid()) {
         bool shouldTransmit = false;
         const NodeRecord* myRecord = nodeDB.getNode(myNodeId);
         
         float distFromLastTx = (myRecord != nullptr) ? myRecord->distance : 0.0f;
         uint32_t now = millis();
-
+ 
         if (distFromLastTx > MIN_MOVEMENT_METERS && currentSpeed > MIN_SPEED_KMPH) {
             shouldTransmit = true;
         } else if (distFromLastTx > SNEAK_MOVEMENT_METERS) {
             shouldTransmit = true;
         } 
-
+ 
         if (shouldTransmit && (now - lastTxTime >= TX_INTERVAL_MOVING)) {
             txManager.sendCoords(gps.getLat(), gps.getLon(), TX_HIGH);
             nodeDB.updateNodeCoords(myNodeId, gps.getLat(), gps.getLon(), 0); 
@@ -340,12 +375,9 @@
             lastTxTime = millis(); 
         } 
     } 
-
+ 
      txManager.processQueue();
-
-     // --- Секундный блок (Пинг экрана и пересчет геометрии) ---
-     // Назначение: Раз в секунду обновляет информацию на дисплее и выполняет тяжелый 
-     // пересчет азимутов и дистанций до всех активных узлов в базе (если это не отключено логикой).
+ 
      if (millis() - lastGpsLogTime >= gpsUpdateInterval) { 
          lastGpsLogTime = millis();
          digitalWrite(LED_PIN, !digitalRead(LED_PIN)); 
@@ -357,27 +389,22 @@
          const NodeRecord* targetNode = nodeDB.getNode(currentTargetId);
          
          bool isTargetValid = (targetNode != nullptr && targetNode->isActive);
-
+ 
          if (!isTargetValid && currentTargetId != 0) {
              packetManager.clearLastTargetId();
              currentTargetId = 0;
          } 
-
+ 
          if (!gps.isValid()) {
              line1 = (sats > 0) ? ("GPS Wait " + String(sats)) : "GPS ERROR";
          } else {
              line1 = "GPS OK " + String(sats);
-
-             // ИЗМЕНЕНИЕ 1.18: Паразитный апдейт своих координат удален, чтобы 
-             // дистанция адаптивной передачи отсчитывалась честно с момента последнего TX.
-
-             // Вычисляем масштаб долготы (он очень легкий, нужен всем)
+ 
              if (!isLonScaleSet) {
                  packer.updateLonScale(gps.getLat());
                  isLonScaleSet = true;
              } 
-
-             // Если мы быстрый Трекер, то отключаем тяжелую математику (экономия CPU и батареи)
+ 
              if (!isFastTracker) {
                  for (int i = 1; i < 255; i++) {
                      const NodeRecord* node = nodeDB.getNode(i);
@@ -396,7 +423,7 @@
                          } 
                      } 
                  } 
-             } // end if (!isFastTracker)
+             } 
          } 
  
          line2 = "My: " + String(myNodeId) + "-" + String(myMsgSeq);
@@ -413,7 +440,7 @@
          } else {
              line4 = "No targets";
          } 
-
+ 
          display.showStatus(line1, line2, line3, line4); 
      } 
  }
