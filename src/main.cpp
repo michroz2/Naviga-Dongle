@@ -1,7 +1,7 @@
 /**
  * Project: Naviga-Dongle (T-Beam v1.1 Custom E22 + Universal GPS)
  * File: main.cpp
- * Version: 1.19 Изменение: Единый вычислитель джиттера и активация статических координат (Шаг 2).
+ * Version: 1.20 Изменение: Рефакторинг UI (Шаг 1.3) — перенос логики представления строк и LED в DisplayManager.
  * Description: Главный файл оркестратора.
  */
 
@@ -56,7 +56,6 @@
  
  bool isLonScaleSet = false;                            
  
- // ИЗМЕНЕНИЕ 1.19: Единый вычислитель Джиттера с учетом ролей
  uint32_t calculateRelayJitter(uint8_t myRole, uint8_t senderRole, float snr) {
      uint32_t minMs, maxMs;
      
@@ -68,17 +67,14 @@
          maxMs = STALKER_JITTER_MAX_MS;
      }
  
-     // VIP-пакет (от Трекера): сдвигаем окно вниз (делим MAX пополам)
      if (senderRole == NODE_TRACKER) {
          maxMs /= 2;
-         if (maxMs < minMs) maxMs = minMs; // Защита от пересечения границ
+         if (maxMs < minMs) maxMs = minMs; 
      }
  
-     // Картографирование SNR (от -15 до 5) на выбранный диапазон
      long snrInt = constrain((long)snr, -15, 5);
      uint32_t baseDelay = map(snrInt, -15, 5, minMs, maxMs);
      
-     // Добавляем случайный разброс 0-50 мс для защиты от коллизий равных узлов
      return baseDelay + random(0, 50);
  }
  
@@ -193,10 +189,12 @@
      unsigned long start = millis();
      while (!Serial && (millis() - start < 3000)); 
      LOG_INFO("SYS", "--- DONGLE BOOT START ---");
+     
      pinMode(LORA_ONBOARD_CS, OUTPUT);
      digitalWrite(LORA_ONBOARD_CS, HIGH);
-     pinMode(LED_PIN, OUTPUT);
-     digitalWrite(LED_PIN, LED_OFF); 
+     
+     // ИЗМЕНЕНИЕ 1.20: Удалена прямая инициализация LED_PIN. Теперь это делает display.init()
+ 
      Wire.begin(I2C_SDA, I2C_SCL);                       
      SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS); 
      
@@ -205,7 +203,6 @@
      display.showLogo();
      gps.init(updateScreenCb, cycleGpsPowerCb); 
      
-     // ИЗМЕНЕНИЕ 1.19: Передача статических координат при загрузке Ретранслятора
      if (myNodeType == NODE_RELAY) {
          gps.setStaticLocation(RELAY_STATIC_LAT, RELAY_STATIC_LON);
      }
@@ -328,8 +325,7 @@
                             } 
  
                          if (router.shouldRetransmit(rxHeader, nodeDB, myNodeType, currentSpeed)) {
-                             // ИЗМЕНЕНИЕ 1.19: Извлечение роли отправителя и расчет джиттера до помещения в очередь
-                             uint8_t senderRole = NODE_STALKER; // Значение по умолчанию
+                             uint8_t senderRole = NODE_STALKER; 
                              const NodeRecord* senderNode = nodeDB.getNode(rxHeader.senderId);
                              if (senderNode != nullptr) {
                                  senderRole = senderNode->type;
@@ -378,11 +374,13 @@
  
      txManager.processQueue();
  
+     // --- Секундный блок ---
      if (millis() - lastGpsLogTime >= gpsUpdateInterval) { 
          lastGpsLogTime = millis();
-         digitalWrite(LED_PIN, !digitalRead(LED_PIN)); 
          
-         String line1, line2, line3, line4;
+         // ИЗМЕНЕНИЕ 1.20: Инкапсулированный вызов LED
+         display.toggleLed(); 
+         
          int sats = gps.getSatellites();
  
          uint8_t currentTargetId = packetManager.getLastTargetId();
@@ -395,11 +393,7 @@
              currentTargetId = 0;
          } 
  
-         if (!gps.isValid()) {
-             line1 = (sats > 0) ? ("GPS Wait " + String(sats)) : "GPS ERROR";
-         } else {
-             line1 = "GPS OK " + String(sats);
- 
+         if (gps.isValid()) {
              if (!isLonScaleSet) {
                  packer.updateLonScale(gps.getLat());
                  isLonScaleSet = true;
@@ -426,21 +420,13 @@
              } 
          } 
  
-         line2 = "My: " + String(myNodeId) + "-" + String(myMsgSeq);
-         
-         uint8_t totalNodes = nodeDB.getActiveNodesCount();
-         uint8_t neighbors = (totalNodes > 0) ? (totalNodes - 1) : 0;
-         line3 = "Neighbors: " + String(neighbors);
-         
-         if (isTargetValid) {
-             line4 = String(targetNode->nodeId) + ": " + 
-                     String((int)targetNode->distance) + "m/" + 
-                     String((int)targetNode->azimuth) + "/" + 
-                     String(getConnectionQuality(targetNode->nodeId));
-         } else {
-             line4 = "No targets";
-         } 
+         // ИЗМЕНЕНИЕ 1.20: Делегирование сборки и вывода UI менеджеру дисплея
+         int targetDist = isTargetValid ? (int)targetNode->distance : 0;
+         int targetAzimuth = isTargetValid ? (int)targetNode->azimuth : 0;
+         int targetQuality = isTargetValid ? getConnectionQuality(targetNode->nodeId) : 0;
  
-         display.showStatus(line1, line2, line3, line4); 
+         display.updateMainScreen(gps.isValid(), sats, myNodeId, myMsgSeq, 
+                                  nodeDB.getActiveNodesCount(), isTargetValid, currentTargetId, 
+                                  targetDist, targetAzimuth, targetQuality); 
      } 
  }
