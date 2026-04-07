@@ -1,6 +1,6 @@
 /**
  * File: NodeDatabase.h
- * Version: 1.15 Изменение: Автоматическая регистрация узла (addNode) при обновлении параметров.
+ * Version: 1.16 Изменение: Добавлена защита локального узла в методе cleanup.
  * Description: Заголовочный файл базы данных узлов.
  */
  #ifndef NODE_DATABASE_H
@@ -44,7 +44,10 @@
      void updateNodeDistanceAzimuth(uint8_t nodeId, float dist, float azmt);
  
      void removeNode(uint8_t nodeId);
-     void cleanup();
+     
+     // НОВОЕ: Передаем ID локального узла, чтобы сборщик мусора его не удалял
+     void cleanup(uint8_t excludeNodeId = 0); 
+     
      uint8_t getActiveNodesCount() const;
     // Методы топологии
     void updateTopology();

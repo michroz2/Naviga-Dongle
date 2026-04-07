@@ -1,6 +1,6 @@
 /**
  * File: NodeDatabase.cpp
- * Version: 1.15 Изменение: Автоматическая регистрация узла (addNode) при обновлении параметров.
+ * Version: 1.16 Изменение: Реализация защиты excludeNodeId в сборщике мусора cleanup.
  * Description: Реализация базы данных узлов.
  */
  #include "NodeDatabase.h"
@@ -109,9 +109,12 @@ bool NodeDatabase::isNodeActive(uint8_t nodeId) const {
      if (_activeNodesCount > 0) _activeNodesCount--; 
     } // NodeDatabase::removeNode()
  
-    void NodeDatabase::cleanup() {
+    void NodeDatabase::cleanup(uint8_t excludeNodeId) {
         uint32_t currentMillis = millis();
         for (int i = 1; i < MAX_NODES; i++) {
+            // Защита локального узла от очистки по таймауту
+            if (i == excludeNodeId) continue;
+
             if (nodes[i].isActive && (currentMillis - nodes[i].lastSeen > NODE_TIMEOUT_MS)) {
                 nodes[i].isActive = false;
                 if (_activeNodesCount > 0) _activeNodesCount--;
