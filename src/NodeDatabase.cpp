@@ -1,6 +1,6 @@
 /**
  * File: NodeDatabase.cpp
- * Version: 1.14 Изменение: Реализация метода addNode, удаление getOrCreateNode.
+ * Version: 1.15 Изменение: Автоматическая регистрация узла (addNode) при обновлении параметров.
  * Description: Реализация базы данных узлов.
  */
  #include "NodeDatabase.h"
@@ -61,7 +61,9 @@ bool NodeDatabase::isNodeActive(uint8_t nodeId) const {
 
  void NodeDatabase::updateNodeInfo(uint8_t nodeId, const char* name, uint8_t nodeType) {
      if (nodeId == 0 || nodeId >= MAX_NODES) return;
-     getNode(nodeId);
+     if (!isNodeActive(nodeId)) {
+         addNode(nodeId);
+     }
      nodes[nodeId].type = nodeType;
      strncpy(nodes[nodeId].nodeName, name, sizeof(nodes[nodeId].nodeName) - 1);
      nodes[nodeId].nodeName[sizeof(nodes[nodeId].nodeName) - 1] = '\0';
@@ -70,25 +72,27 @@ bool NodeDatabase::isNodeActive(uint8_t nodeId) const {
  
  void NodeDatabase::updateNodeSNR(uint8_t nodeId, float snr) {
      if (nodeId == 0 || nodeId >= MAX_NODES) return;
-     const NodeRecord* node = getNode(nodeId); 
-     if (node != nullptr) {
-         nodes[nodeId].snr = snr;
-         nodes[nodeId].lastSeen = millis(); 
-     } // if (node != nullptr)
+     if (!isNodeActive(nodeId)) {
+         addNode(nodeId);
+     }
+     nodes[nodeId].snr = snr;
+     nodes[nodeId].lastSeen = millis(); 
  } // NodeDatabase::updateNodeSNR()
  
  void NodeDatabase::updateNodeDistanceAzimuth(uint8_t nodeId, float dist, float azmt) {
      if (nodeId == 0 || nodeId >= MAX_NODES) return;
-     const NodeRecord* node = getNode(nodeId);
-     if (node != nullptr) {
-         nodes[nodeId].distance = dist;
-         nodes[nodeId].azimuth = azmt;
-     } // if (node != nullptr)
+     if (!isNodeActive(nodeId)) {
+         addNode(nodeId);
+     }
+     nodes[nodeId].distance = dist;
+     nodes[nodeId].azimuth = azmt;
  } // NodeDatabase::updateNodeDistanceAzimuth()
  
  void NodeDatabase::updateNodeCoords(uint8_t nodeId, float lat, float lon, uint32_t packed, bool updateTimer) {
      if (nodeId == 0 || nodeId >= MAX_NODES) return;
-     getNode(nodeId); 
+     if (!isNodeActive(nodeId)) {
+         addNode(nodeId);
+     }
      nodes[nodeId].lat = lat;
      nodes[nodeId].lon = lon;
      if (packed != 0) {

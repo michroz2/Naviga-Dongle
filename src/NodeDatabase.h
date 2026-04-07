@@ -1,6 +1,6 @@
 /**
  * File: NodeDatabase.h
- * Version: 1.14 Изменение: Внедрение явного метода addNode вместо getOrCreateNode. Убран friend class.
+ * Version: 1.15 Изменение: Автоматическая регистрация узла (addNode) при обновлении параметров.
  * Description: Заголовочный файл базы данных узлов.
  */
  #ifndef NODE_DATABASE_H
