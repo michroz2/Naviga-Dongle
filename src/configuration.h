@@ -1,6 +1,6 @@
 /**
  * File: configuration.h
- * Version: 1.12 Изменение: Добавлен таймаут кэширования топологии и порог плотности группы.
+ * Version: 1.17 Изменение: Добавлена константа MIN_RELAY_DISTANCE_METERS для векторного фильтра.
  * Description: Конфигурация пинов и базовых настроек.
  */
  
@@ -78,6 +78,7 @@ const uint32_t gpsUpdateInterval = 1000;
 // --- НАСТРОЙКИ СЕТИ ---
 #define DEFAULT_TTL 3 // Максимальное количество ретрансляций (прыжков) для одного пакета
 #define MAX_DIRECT_CONNECT_METERS 200.0f 
+#define MIN_RELAY_DISTANCE_METERS 20.0f  // Минимальная дистанция до узла для участия в векторной ретрансляции
 #define TOPOLOGY_UPDATE_INTERVAL_MS 15000 // Интервал пересчета топологии (15 сек)
 
 #endif // CONFIGURATION_H

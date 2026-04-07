@@ -1,6 +1,6 @@
 /**
  * File: NodeDatabase.h
- * Version: 1.16 Изменение: Добавлена защита локального узла в методе cleanup.
+ * Version: 1.17 Изменение: Добавлен метод hasNodesInOppositeDirection и массив квадрантов.
  * Description: Заголовочный файл базы данных узлов.
  */
  #ifndef NODE_DATABASE_H
@@ -34,9 +34,9 @@
     
      const NodeRecord* getNode(uint8_t nodeId);
         
-     bool isNodeActive(uint8_t nodeId) const;       // Безопасная проверка активности узла (без побочных эффектов)
+     bool isNodeActive(uint8_t nodeId) const;       
     
-     void addNode(uint8_t nodeId);                  // Явное добавление (инициализация) узла
+     void addNode(uint8_t nodeId);                  
     
      void updateNodeCoords(uint8_t nodeId, float lat, float lon, uint32_t packed, bool updateTimer = true);
      void updateNodeInfo(uint8_t nodeId, const char* name, uint8_t nodeType);
@@ -44,21 +44,24 @@
      void updateNodeDistanceAzimuth(uint8_t nodeId, float dist, float azmt);
  
      void removeNode(uint8_t nodeId);
-     
-     // НОВОЕ: Передаем ID локального узла, чтобы сборщик мусора его не удалял
      void cleanup(uint8_t excludeNodeId = 0); 
      
      uint8_t getActiveNodesCount() const;
+     
     // Методы топологии
     void updateTopology();
     float getCachedMaxDist() const;
     
+    // НОВОЕ: Векторный фильтр
+    bool hasNodesInOppositeDirection(uint8_t referenceNodeId) const;
+    
  private:
      NodeRecord nodes[MAX_NODES];
 
-     // НОВОЕ: Кэшированные значения
+     // Кэшированные значения топологии
     uint8_t _activeNodesCount;
     float _cachedMaxDist;
+    uint8_t _quadrantNodes[4]; // 0: 0-90, 1: 90-180, 2: 180-270, 3: 270-360
     
  }; // class NodeDatabase
  

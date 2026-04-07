@@ -1,7 +1,7 @@
 /**
  * Project: Naviga-Dongle (T-Beam v1.1 Custom E22 + Universal GPS)
  * File: main.cpp
- * Version: 1.16 Изменение: Исключение myNodeId из очистки БД и корректное обновление lastSeen при отправках.
+ * Version: 1.17 Изменение: Зависимость updateTopology от gps.isValid() и векторная отмена abortRelay.
  * Description: Главный файл оркестратора.
  */
 
@@ -27,7 +27,7 @@
 
  uint8_t myNodeId = 0; 
  uint8_t myMsgSeq = 0;
- uint8_t myNodeType = NODE_STALKER; // Наша роль по умолчанию
+ uint8_t myNodeType = NODE_STALKER; 
 
  PowerManager power;                                      
  DisplayManager display(0x3c, I2C_SDA, I2C_SCL); 
@@ -46,12 +46,12 @@
  #endif
  void setFlag(void) {
      receivedFlag = true;
- } // setFlag()
+ } 
 
  uint32_t lastTxTime = 0;                               
  uint32_t lastGpsLogTime = 0;                           
- uint32_t lastCleanupTime = 0;      // Таймер для неблокирующей очистки БД                          
- uint32_t lastHeartbeatTime = 0;    // Таймер для фоновой рассылки NodeInfo
+ uint32_t lastCleanupTime = 0;                                
+ uint32_t lastHeartbeatTime = 0;    
  uint32_t lastTopologyUpdateTime = 0;
 
  bool isLonScaleSet = false;                            
@@ -69,15 +69,15 @@
      if (q < 1) q = 1;
      if (q > 10) q = 10;
      return q;
- } // getConnectionQuality()
+ } 
 
  void updateScreenCb(String line1, String line2, String line3, String line4) {
      display.showStatus(line1, line2, line3, line4);
- } // updateScreenCb()
+ } 
 
  void cycleGpsPowerCb() {
      power.cycleGpsPower();
- } // cycleGpsPowerCb()
+ } 
 
  void handleCollision() {
     uint8_t oldId = myNodeId;
@@ -86,27 +86,20 @@
     randomSeed(esp_random());
     do {
         myNodeId = random(1, 255);
-    } while (nodeDB.getNode(myNodeId) != nullptr); // do-while
+    } while (nodeDB.getNode(myNodeId) != nullptr); 
     
-    nodeDB.addNode(myNodeId); // Регистрируем новый собственный узел
+    nodeDB.addNode(myNodeId); 
     
     LOG_WARN("COLLISION", "ID %d is taken! Switched to new ID: %d", oldId, myNodeId);
     
     myMsgSeq = 0; 
     
-    // Координаты в базу здесь больше не записываем. 
-    // Адаптивная логика в loop() сама увидит "новый" ID и отправит GPS-пакет через 5 секунд.
-    
     char myName[12];
     snprintf(myName, sizeof(myName), "Node-%d", myNodeId);
     
-    // Отправляем критическое оповещение о смене имени
     txManager.sendNodeInfo(myName, myNodeType, TX_CRITICAL);
-    nodeDB.updateNodeInfo(myNodeId, myName, myNodeType); // Фиксируем обновление и lastSeen для себя
-    
-    // Больше не трогаем lastTxTime вручную. 
-    // loop() сам отработает задержку TX_INTERVAL_MOVING (5 сек) перед посылкой координат.
- } // handleCollision()
+    nodeDB.updateNodeInfo(myNodeId, myName, myNodeType); 
+ } 
 
  void scanNetworkForUniqueId() {
      LOG_INFO("SYS", "Starting network scan for %d ms...", networkScanDuration);
@@ -127,7 +120,7 @@
              lastDispUpdate = now;
              uint32_t left = (networkScanDuration - (now - scanStart)) / 1000;
              display.showStatus("Scanning Net...", "Time left: " + String(left) + " s", "Nodes Found: " + String(nodeDB.getActiveNodesCount()), "Please wait...");
-         } // if (now - lastDispUpdate >= 1000)
+         } 
          
          if (receivedFlag) {
              noInterrupts(); receivedFlag = false; interrupts();
@@ -144,35 +137,35 @@
                      if (router.isValidPacket(rxHeader.getType(), payloadLen)) {
                          if (!router.isDuplicate(rxHeader.senderId, rxHeader.msgSeq)) {
                              packetManager.processPacket(rxHeader, rxBuffer + sizeof(NavigaHeader));
-                         } // if (!router.isDuplicate(...))
-                     } // if (router.isValidPacket(...))
-                 } // if (state == RADIOLIB_ERR_NONE)
-             } // if (len >= sizeof(NavigaHeader))
+                         } 
+                     } 
+                 } 
+             } 
              radio.startReceive();
-         } // if (receivedFlag)
+         } 
          
          gps.update(); 
-     } // while (millis() - scanStart < networkScanDuration)
+     } 
      
      digitalWrite(RED_LED_PIN, HIGH); 
      
      randomSeed(esp_random());
      do {
          myNodeId = random(1, 255);
-     } while (nodeDB.getNode(myNodeId) != nullptr); // do-while
+     } while (nodeDB.getNode(myNodeId) != nullptr); 
      
-     nodeDB.addNode(myNodeId); // Регистрируем наш начальный собственный узел
+     nodeDB.addNode(myNodeId); 
      
      LOG_INFO("SYS", "Scan complete. Selected unique Node ID: %d", myNodeId);
      display.showStatus("Scan Complete", "My new ID:", String(myNodeId), "Starting...");
      delay(2000);
- } // scanNetworkForUniqueId()
+ } 
 
  void setup() {
      delay(500); 
      Serial.begin(115200);
      unsigned long start = millis();
-     while (!Serial && (millis() - start < 3000)); // while
+     while (!Serial && (millis() - start < 3000)); 
      LOG_INFO("SYS", "--- DONGLE BOOT START ---");
      pinMode(LORA_ONBOARD_CS, OUTPUT);
      digitalWrite(LORA_ONBOARD_CS, HIGH);
@@ -190,52 +183,42 @@
      if (!radio.init(setFlag)) {
          display.showStatus("ERROR", "LoRa Init Failed", "Check Logs", "");
          delay(3000);
-     } // if (!radio.init(...))
+     } 
 
      scanNetworkForUniqueId();
      
      char myName[12];
      snprintf(myName, sizeof(myName), "Node-%d", myNodeId);
      txManager.sendNodeInfo(myName, myNodeType, TX_NORMAL);
-     nodeDB.updateNodeInfo(myNodeId, myName, myNodeType); // Фиксируем старт для себя
+     nodeDB.updateNodeInfo(myNodeId, myName, myNodeType); 
      
      lastTxTime = millis(); 
- } // setup()
+ } 
  
  void loop() {
-
-    // --- Очистка устаревших узлов (раз в 10 секунд) ---
     uint32_t currentMillis = millis();
 
-    // --- Обновление топологии по таймеру ---
-    if (currentMillis - lastTopologyUpdateTime > TOPOLOGY_UPDATE_INTERVAL_MS) {
+    // НОВОЕ: Обновление топологии строго при наличии фикса GPS
+    if (gps.isValid() && (currentMillis - lastTopologyUpdateTime > TOPOLOGY_UPDATE_INTERVAL_MS)) {
         nodeDB.updateTopology();
         lastTopologyUpdateTime = currentMillis;
     }
 
-    // --- Cleanup базы по таймеру ---
     if (currentMillis - lastCleanupTime > CLEANUP_INTERVAL_MS) {
-        // Защищаем свой узел от удаления
         nodeDB.cleanup(myNodeId);
         lastCleanupTime = currentMillis;
-    } // if (currentMillis - lastCleanupTime > 10000)
+    } 
 
-    // --- Редкий фоновый пинг NodeInfo (Heartbeat) ---
     if (currentMillis - lastHeartbeatTime > HEARTBEAT_INTERVAL_MS) {
-        if (myNodeId != 0) { // Отправляем только если ID уже проинициализирован
+        if (myNodeId != 0) { 
             char currentName[12];
             snprintf(currentName, sizeof(currentName), "Node-%d", myNodeId);
-            
-            // Отправляем пакет с приоритетом TX_NORMAL
             txManager.sendNodeInfo(currentName, myNodeType, TX_NORMAL);
-            // Честно обновляем свой таймер lastSeen при фактической отправке
             nodeDB.updateNodeInfo(myNodeId, currentName, myNodeType); 
-            
             LOG_INFO("ACTION", "Heartbeat sent: NodeInfo (Name: %s, Type: %d)", currentName, myNodeType);
-        } // if (myNodeId != 0)
-        
+        } 
         lastHeartbeatTime = currentMillis;
-    } // if (currentMillis - lastHeartbeatTime > HEARTBEAT_INTERVAL_MS)
+    } 
 
      gps.update();
 
@@ -269,100 +252,93 @@
                          } else {
                              LOG_INFO("LORA", "Valid echo of our pkt Seq %d", rxHeader.msgSeq);
                              isOwnEcho = true;
-                         } // if (seqDiff <= 0 || ...)
-                     } // if (rxHeader.relayId == myNodeId)
+                         } 
+                     } 
 
                      if (isCollision) {
                          handleCollision();
-                     } // if (isCollision)
+                     } 
 
                      if (rxHeader.relayId != myNodeId) {
                          nodeDB.updateNodeSNR(rxHeader.relayId, currentSNR);
-                     } // if (rxHeader.relayId != myNodeId)
+                     } 
 
                      if (isOwnEcho) {
                          // do nothing
                      } else if (!router.isValidPacket(rxHeader.getType(), payloadLen)) {
                          LOG_WARN("LORA", "Invalid packet format/size! Type: %d, Len: %d", rxHeader.getType(), payloadLen);
                      } else if (router.isDuplicate(rxHeader.senderId, rxHeader.msgSeq)) {
-                         LOG_WARN("LORA", "Duplicate pkt Node %d Seq %d dropped.", rxHeader.senderId, rxHeader.msgSeq);
-                         txManager.abortRelay(rxHeader.senderId, rxHeader.msgSeq);
+                         
+                         // НОВОЕ: Умная отмена ретрансляции на основе векторов
+                         if (!nodeDB.hasNodesInOppositeDirection(rxHeader.relayId)) {
+                             LOG_INFO("QUEUE", "Relayer %d has no opposite nodes. Aborting our relay job for Seq %d.", rxHeader.relayId, rxHeader.msgSeq);
+                             txManager.abortRelay(rxHeader.senderId, rxHeader.msgSeq);
+                         } else {
+                             LOG_INFO("QUEUE", "Nodes exist opposite to relayer %d. Keeping our relay job for Seq %d.", rxHeader.relayId, rxHeader.msgSeq);
+                         }
+                         
                      } else {
                          LOG_INFO("LORA", "Valid pkt Type %d from Node %d (Relay: %d, Seq: %d, SNR: %.1f)", 
                                   rxHeader.getType(), rxHeader.senderId, rxHeader.relayId, rxHeader.msgSeq, currentSNR);
                          
-                            // НОВОЕ: 1. Проверяем, новый ли это узел (до его активации в базе)
                             bool isNewNode = !nodeDB.isNodeActive(rxHeader.senderId);
-                                                    
-                            // 2. Штатная обработка пакета (здесь узел добавляется/обновляется)
                             packetManager.processPacket(rxHeader, rxBuffer + sizeof(NavigaHeader));
 
-                            // НОВОЕ: 3. Реактивное Приветствие (батчинг ответов)
                             if (isNewNode && rxHeader.senderId != myNodeId) {
                                 uint32_t currentMillis = millis();
-                                uint32_t jitterMs = random(MIN_GREETING_NODEINFO_JITTER, MAX_GREETING_NODEINFO_JITTER); // От 2 до 5 минут (120000 - 300000 мс)
-                                // Безусловное "состаривание" таймера Heartbeat:
-                                // Сдвигаем lastHeartbeatTime так, чтобы до планового срабатывания осталось ровно jitterMs
+                                uint32_t jitterMs = random(MIN_GREETING_NODEINFO_JITTER, MAX_GREETING_NODEINFO_JITTER); 
                                 lastHeartbeatTime = currentMillis - HEARTBEAT_INTERVAL_MS + jitterMs;
-                                
                                 LOG_INFO("SYS", "New Node %d discovered! NodeInfo reply (batching) scheduled in %d sec", rxHeader.senderId, jitterMs / 1000);
-                            } // if (isNewNode && rxHeader.senderId != myNodeId)
+                            } 
 
                          if (router.shouldRetransmit(rxHeader, nodeDB)) {
                              txManager.enqueueRelay(rxHeader, rxBuffer + sizeof(NavigaHeader), payloadLen, currentSNR);
-                         } // if (router.shouldRetransmit(...))
-                     } // if (isOwnEcho)
-                 } // if (len >= sizeof(NavigaHeader))
-             } // if (state == RADIOLIB_ERR_NONE)
-         } // if (len > 0)
+                         } 
+                     } 
+                 } 
+             } 
+         } 
          radio.startReceive();
-     } // if (receivedFlag)
+     } 
 
-    // --- АДАПТИВНАЯ ОТПРАВКА КООРДИНАТ ---
     if (gps.isValid()) {
         bool shouldTransmit = false;
         const NodeRecord* myRecord = nodeDB.getNode(myNodeId);
         
-        // Получаем дистанцию (рассчитанную в блоке экрана) и текущую скорость
         float distFromLastTx = (myRecord != nullptr) ? myRecord->distance : 0.0f;
         float currentSpeed = gps.getSpeed();
         uint32_t now = millis();
 
-        // Гибридный фильтр движения
         if (distFromLastTx > MIN_MOVEMENT_METERS && currentSpeed > MIN_SPEED_KMPH) {
             shouldTransmit = true;
         } else if (distFromLastTx > SNEAK_MOVEMENT_METERS) {
             shouldTransmit = true;
-        } // if (distFromLastTx > ...)
+        } 
 
-        // Принятие решения об отправке
         if (shouldTransmit && (now - lastTxTime >= TX_INTERVAL_MOVING)) {
             txManager.sendCoords(gps.getLat(), gps.getLon(), TX_HIGH);
-            // Вызываем обновление БД с флагом true (по умолчанию), чтобы зафиксировать lastSeen
             nodeDB.updateNodeCoords(myNodeId, gps.getLat(), gps.getLon(), 0); 
             LOG_INFO("ACTION", "Adaptive TX (Moving): Dist: %.1fm, Speed: %.1fkm/h", distFromLastTx, currentSpeed);
             lastTxTime = now;
         } else if (now - lastTxTime >= TX_INTERVAL_STILL) {
             txManager.sendCoords(gps.getLat(), gps.getLon(), TX_HIGH);
-            // Аналогично фиксируем lastSeen
             nodeDB.updateNodeCoords(myNodeId, gps.getLat(), gps.getLon(), 0);
             LOG_INFO("ACTION", "Adaptive TX (Still Heartbeat)");
             lastTxTime = now;
-        } // if (shouldTransmit && ...)
+        } 
     } else {
-        // Если нет FIX, просто сбрасываем таймер STILL, чтобы не спамить лог
         if (millis() - lastTxTime >= TX_INTERVAL_STILL) {
             LOG_WARN("TX", "Skip TX: GPS location not valid.");
             lastTxTime = millis(); 
-        } // if (millis() - lastTxTime >= TX_INTERVAL_STILL)
-    } // if (gps.isValid())
+        } 
+    } 
 
      txManager.processQueue();
 
      if (millis() - lastCleanupTime >= NODE_TIMEOUT_MS) {
          lastCleanupTime = millis();
-         nodeDB.cleanup(myNodeId); // Защитный вызов
-     } // if (millis() - lastCleanupTime >= ...)
+         nodeDB.cleanup(myNodeId); 
+     } 
 
      if (millis() - lastGpsLogTime >= gpsUpdateInterval) { 
          lastGpsLogTime = millis();
@@ -379,20 +355,19 @@
          if (!isTargetValid && currentTargetId != 0) {
              packetManager.clearLastTargetId();
              currentTargetId = 0;
-         } // if (!isTargetValid && currentTargetId != 0)
+         } 
 
          if (!gps.isValid()) {
              line1 = (sats > 0) ? ("GPS Wait " + String(sats)) : "GPS ERROR";
          } else {
              line1 = "GPS OK " + String(sats);
 
-             // Оставляем флаг false, так как это просто пинг экрана! Таймер lastSeen не обновляется!
              nodeDB.updateNodeCoords(myNodeId, gps.getLat(), gps.getLon(), 0, false);
              
              if (!isLonScaleSet) {
                  packer.updateLonScale(gps.getLat());
                  isLonScaleSet = true;
-             } // if (!isLonScaleSet)
+             } 
 
              for (int i = 1; i < 255; i++) {
                  const NodeRecord* node = nodeDB.getNode(i);
@@ -402,16 +377,16 @@
                          float unpLat, unpLon;
                          packer.unpack(node->packedCoords, gps.getLat(), gps.getLon(), unpLat, unpLon);
                          nodeDB.updateNodeCoords(i, unpLat, unpLon, node->packedCoords, false);
-                     } // if (node->packedCoords != 0 && ...)
+                     } 
                      
                      if (node->lat != 0.0f || node->lon != 0.0f) {
                          float d = gps.distanceTo(node->lat, node->lon);
                          float a = gps.courseTo(node->lat, node->lon);
                          nodeDB.updateNodeDistanceAzimuth(i, d, a);
-                     } // if (node->lat != 0.0f || ...)
-                 } // if (node != nullptr && node->isActive)
-             } // for (int i = 1; i < 255; i++)
-         } // if (!gps.isValid())
+                     } 
+                 } 
+             } 
+         } 
  
          line2 = "My: " + String(myNodeId) + "-" + String(myMsgSeq);
          
@@ -426,8 +401,8 @@
                      String(getConnectionQuality(targetNode->nodeId));
          } else {
              line4 = "No targets";
-         } // if (isTargetValid)
+         } 
 
          display.showStatus(line1, line2, line3, line4); 
-     } // if (millis() - lastGpsLogTime >= gpsUpdateInterval)
- } // loop()
+     } 
+ }
