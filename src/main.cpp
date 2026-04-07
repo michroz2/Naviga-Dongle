@@ -202,7 +202,6 @@
  
  void loop() {
 
-    // --- Очистка устаревших узлов (раз в 10 секунд) ---
     uint32_t currentMillis = millis();
 
     // --- Обновление топологии по таймеру ---
@@ -361,7 +360,7 @@
 
      if (millis() - lastGpsLogTime >= gpsUpdateInterval) { 
          lastGpsLogTime = millis();
-         digitalWrite(LED_PIN, !digitalRead(LED_PIN)); 
+         digitalWrite(LED_PIN, !digitalRead(LED_PIN)); // Моргание светодиодом
          
          String line1, line2, line3, line4;
          int sats = gps.getSatellites();
