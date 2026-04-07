@@ -32,8 +32,8 @@
     public:
         NodeDatabase();
     
-     const NodeRecord* getNode(uint8_t nodeId);
-        
+    const NodeRecord* getNode(uint8_t nodeId) const;
+
      bool isNodeActive(uint8_t nodeId) const;       
     
      void addNode(uint8_t nodeId);                  

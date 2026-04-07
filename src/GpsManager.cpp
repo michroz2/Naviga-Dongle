@@ -90,4 +90,6 @@ float GpsManager::distanceTo(float lat, float lon) {
 
 float GpsManager::courseTo(float lat, float lon) {
     return TinyGPSPlus::courseTo(getLat(), getLon(), lat, lon);
+
+
 }

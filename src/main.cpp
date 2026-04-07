@@ -1,7 +1,7 @@
 /**
  * Project: Naviga-Dongle (T-Beam v1.1 Custom E22 + Universal GPS)
  * File: main.cpp
- * Version: 1.17 Изменение: Зависимость updateTopology от gps.isValid() и векторная отмена abortRelay.
+ * Version: 1.18 Изменение: Ролевая оптимизация CPU и фикс паразитной записи своих координат.
  * Description: Главный файл оркестратора.
  */
 
@@ -197,10 +197,18 @@
  
  void loop() {
     uint32_t currentMillis = millis();
+    float currentSpeed = gps.getSpeed();
 
-    // НОВОЕ: Обновление топологии строго при наличии фикса GPS
+    // Флаг для отключения тяжелой математики, если Трекер бежит
+    bool isFastTracker = (myNodeType == NODE_TRACKER && currentSpeed > TRACKER_FAST_SPEED_KMPH);
+
+    // --- Обновление топологии по таймеру ---
     if (gps.isValid() && (currentMillis - lastTopologyUpdateTime > TOPOLOGY_UPDATE_INTERVAL_MS)) {
-        nodeDB.updateTopology();
+        if (isFastTracker) {
+            LOG_INFO("SYS", "Topology sync skipped: Tracker is running.");
+        } else {
+            nodeDB.updateTopology();
+        }
         lastTopologyUpdateTime = currentMillis;
     }
 
@@ -269,7 +277,7 @@
                          LOG_WARN("LORA", "Invalid packet format/size! Type: %d, Len: %d", rxHeader.getType(), payloadLen);
                      } else if (router.isDuplicate(rxHeader.senderId, rxHeader.msgSeq)) {
                          
-                         // НОВОЕ: Умная отмена ретрансляции на основе векторов
+                         // Умная отмена ретрансляции на основе векторов
                          if (!nodeDB.hasNodesInOppositeDirection(rxHeader.relayId)) {
                              LOG_INFO("QUEUE", "Relayer %d has no opposite nodes. Aborting our relay job for Seq %d.", rxHeader.relayId, rxHeader.msgSeq);
                              txManager.abortRelay(rxHeader.senderId, rxHeader.msgSeq);
@@ -291,7 +299,8 @@
                                 LOG_INFO("SYS", "New Node %d discovered! NodeInfo reply (batching) scheduled in %d sec", rxHeader.senderId, jitterMs / 1000);
                             } 
 
-                         if (router.shouldRetransmit(rxHeader, nodeDB)) {
+                         // ИЗМЕНЕНИЕ 1.18: Передача текущей скорости и роли для ролевого фильтра
+                         if (router.shouldRetransmit(rxHeader, nodeDB, myNodeType, currentSpeed)) {
                              txManager.enqueueRelay(rxHeader, rxBuffer + sizeof(NavigaHeader), payloadLen, currentSNR);
                          } 
                      } 
@@ -306,7 +315,6 @@
         const NodeRecord* myRecord = nodeDB.getNode(myNodeId);
         
         float distFromLastTx = (myRecord != nullptr) ? myRecord->distance : 0.0f;
-        float currentSpeed = gps.getSpeed();
         uint32_t now = millis();
 
         if (distFromLastTx > MIN_MOVEMENT_METERS && currentSpeed > MIN_SPEED_KMPH) {
@@ -335,11 +343,9 @@
 
      txManager.processQueue();
 
-     if (millis() - lastCleanupTime >= NODE_TIMEOUT_MS) {
-         lastCleanupTime = millis();
-         nodeDB.cleanup(myNodeId); 
-     } 
-
+     // --- Секундный блок (Пинг экрана и пересчет геометрии) ---
+     // Назначение: Раз в секунду обновляет информацию на дисплее и выполняет тяжелый 
+     // пересчет азимутов и дистанций до всех активных узлов в базе (если это не отключено логикой).
      if (millis() - lastGpsLogTime >= gpsUpdateInterval) { 
          lastGpsLogTime = millis();
          digitalWrite(LED_PIN, !digitalRead(LED_PIN)); 
@@ -362,30 +368,35 @@
          } else {
              line1 = "GPS OK " + String(sats);
 
-             nodeDB.updateNodeCoords(myNodeId, gps.getLat(), gps.getLon(), 0, false);
-             
+             // ИЗМЕНЕНИЕ 1.18: Паразитный апдейт своих координат удален, чтобы 
+             // дистанция адаптивной передачи отсчитывалась честно с момента последнего TX.
+
+             // Вычисляем масштаб долготы (он очень легкий, нужен всем)
              if (!isLonScaleSet) {
                  packer.updateLonScale(gps.getLat());
                  isLonScaleSet = true;
              } 
 
-             for (int i = 1; i < 255; i++) {
-                 const NodeRecord* node = nodeDB.getNode(i);
-                 if (node != nullptr && node->isActive) {
-                     
-                     if (node->packedCoords != 0 && node->lat == 0.0f && node->lon == 0.0f) {
-                         float unpLat, unpLon;
-                         packer.unpack(node->packedCoords, gps.getLat(), gps.getLon(), unpLat, unpLon);
-                         nodeDB.updateNodeCoords(i, unpLat, unpLon, node->packedCoords, false);
-                     } 
-                     
-                     if (node->lat != 0.0f || node->lon != 0.0f) {
-                         float d = gps.distanceTo(node->lat, node->lon);
-                         float a = gps.courseTo(node->lat, node->lon);
-                         nodeDB.updateNodeDistanceAzimuth(i, d, a);
+             // Если мы быстрый Трекер, то отключаем тяжелую математику (экономия CPU и батареи)
+             if (!isFastTracker) {
+                 for (int i = 1; i < 255; i++) {
+                     const NodeRecord* node = nodeDB.getNode(i);
+                     if (node != nullptr && node->isActive) {
+                         
+                         if (node->packedCoords != 0 && node->lat == 0.0f && node->lon == 0.0f) {
+                             float unpLat, unpLon;
+                             packer.unpack(node->packedCoords, gps.getLat(), gps.getLon(), unpLat, unpLon);
+                             nodeDB.updateNodeCoords(i, unpLat, unpLon, node->packedCoords, false);
+                         } 
+                         
+                         if (node->lat != 0.0f || node->lon != 0.0f) {
+                             float d = gps.distanceTo(node->lat, node->lon);
+                             float a = gps.courseTo(node->lat, node->lon);
+                             nodeDB.updateNodeDistanceAzimuth(i, d, a);
+                         } 
                      } 
                  } 
-             } 
+             } // end if (!isFastTracker)
          } 
  
          line2 = "My: " + String(myNodeId) + "-" + String(myMsgSeq);

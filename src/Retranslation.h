@@ -1,8 +1,8 @@
 /**
  * File: Retranslation.h
- * Version: 1.12 Добавлена база для оценки её кэшированных данных
+ * Version: 1.18 Изменение: Добавлены параметры роли и скорости в shouldRetransmit.
  * Description: Заголовочный файл класса фильтрации эфира.
- * Теперь содержит ТОЛЬКО логику валидации и анти-дубликатор. 
+ * Содержит ТОЛЬКО логику валидации и анти-дубликатор. 
  * Вся работа с очередями перенесена в TxManager.
  */
  #ifndef RETRANSLATION_H
@@ -28,8 +28,9 @@ class NodeDatabase;
      // Методы валидации (Таможня)
      bool isDuplicate(uint8_t senderId, uint8_t msgSeq);
      bool isValidPacket(uint8_t msgType, size_t payloadLen) const;
-    // ... [подключаем #include "NodeDatabase.h"] ...
-    bool shouldRetransmit(const NavigaHeader& header, const NodeDatabase& nodeDB) const;
+     
+    // Изменение 1.18: Передаем свою роль и скорость для принятия ролевых решений
+    bool shouldRetransmit(const NavigaHeader& header, const NodeDatabase& nodeDB, uint8_t myNodeType, float mySpeed) const;
 
  private:
      PacketRecord history[HISTORY_SIZE]; 

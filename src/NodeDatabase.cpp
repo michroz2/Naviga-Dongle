@@ -28,9 +28,9 @@
      } 
  } 
  
- const NodeRecord* NodeDatabase::getNode(uint8_t nodeId) {
-     if (nodeId == 0 || nodeId >= MAX_NODES) return nullptr;
-     if (!nodes[nodeId].isActive) return nullptr; 
+ const NodeRecord* NodeDatabase::getNode(uint8_t nodeId) const {
+    if (nodeId == 0 || nodeId >= MAX_NODES) return nullptr;
+    if (!nodes[nodeId].isActive) return nullptr; 
      return &nodes[nodeId];
  } 
 
