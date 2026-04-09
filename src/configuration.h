@@ -1,8 +1,8 @@
 /**
  * File: configuration.h
- * Version: 1.22  -Energy S3 переведен на модуль E22-400M33S (SX1268). Обновлена распиновка.
- * 1.23 Обновлена распиновка T-Energy S3: добавлен I2C дисплей и исправлены пины GPS.
- * Description: Конфигурация пинов и базовых настроек.
+ * Version: 1.24 
+ * Изменение: Финализация распиновки T-Energy S3 (SPI 47/48/21/14, Управление 13/12/11/10/9).
+ * Description: Конфигурация пинов и базовых настроек для разных аппаратных платформ.
  */
  
  #ifndef CONFIGURATION_H
@@ -12,7 +12,6 @@
  
  // ==========================================================
  // --- ВЫБОР ПЛАТЫ (Должен задаваться в platformio.ini) ---
- // Если флаг не передан компилятором, по умолчанию собираем для T-Beam
  // ==========================================================
  #if !defined(BOARD_T_BEAM_V11) && !defined(BOARD_T_ENERGY_S3)
      #define BOARD_T_BEAM_V11 
@@ -34,21 +33,21 @@
      #define LED_OFF     HIGH 
  
      // --- I2C PINS (OLED & AXP2101) ---
-     #define I2C_SDA 21      
-     #define I2C_SCL 22      
+     #define I2C_SDA     21      
+     #define I2C_SCL     22      
  
      // --- POWER MANAGEMENT (AXP2101) ---
-     #define PMU_IRQ 35      
+     #define PMU_IRQ     35      
  
      // --- LORA (ONBOARD SX1276) - Отключен аппаратно CS ---
      #define LORA_ONBOARD_CS 18
-
-// Отменяем стандартные определения пинов T-Beam из системного pins_arduino.h,
-    // чтобы компилятор не выдавал предупреждения "redefined"
-    #undef LORA_CS
-    #undef LORA_RST
-    #undef LORA_IRQ
-
+ 
+     // Отменяем стандартные определения пинов T-Beam из системного pins_arduino.h,
+     // чтобы компилятор не выдавал предупреждения "redefined"
+     #undef LORA_CS
+     #undef LORA_RST
+     #undef LORA_IRQ
+ 
      // --- EBYTE E22-400M33S (SX1268) PINOUT ---
      #define LORA_CS     13  
      #define LORA_RST    14  
@@ -68,43 +67,42 @@
  #endif
  
  // ==========================================================
- // СЕКЦИЯ 2: Конфигурация Lilygo T-Energy S3 + E22-400M33S + GPS
+ // СЕКЦИЯ 2: Конфигурация Lilygo T-Energy S3 + E22-400M33S + GPS + OLED
  // ==========================================================
  #ifdef BOARD_T_ENERGY_S3
      #define BOARD_NAME "T-Energy S3"
  
      // Опции аппаратного обеспечения
      #define HAS_PMU 0               // Питание прямое, AXP2101 отсутствует
-     #define LORA_CHIP_SX1268        // ИЗМЕНЕНИЕ 1.22: Используется чип SX1268 (E22)
+     #define LORA_CHIP_SX1268        
  
-     // --- LED ---
-     // На T-Energy встроенный светодиод может быть на другом пине, временно ставим заглушку
+     // Стандартный LED для S3 (может варьироваться от ревизии)
      #define LED_PIN     0   
      #define LED_ON      HIGH 
      #define LED_OFF     LOW
  
-     // --- DISPLAY I2C PINS --- 
-     #define I2C_SDA 4 
-     #define I2C_SCL 5 
+     // --- DISPLAY OLED I2C PINS --- 
+     #define I2C_SDA     4 
+     #define I2C_SCL     5 
      
-     // Заглушки для PMU и Onboard LoRa (чтобы код компилировался без ошибок)
-     #define PMU_IRQ -1      
+     #define PMU_IRQ     -1      
      #define LORA_ONBOARD_CS -1 
  
      // --- LORA E22-400M33S (SX1268) PINOUT ---
-     #define LORA_CS     10  // FSPI CS0
-     #define LORA_RST    9   
-     #define LORA_BUSY   14  // Новый обязательный пин
-     #define LORA_IRQ    21  // Основной пин прерываний (заменяет DIO0, подключается к DIO1 модуля)
-     #define LORA_RXEN   7   // Управление режимом приема
-     #define LORA_TXEN   8   // Управление режимом передачи
+     #define LORA_CS     48  // NSS
+     #define LORA_RST    13  // NRST
+     #define LORA_BUSY   12  
+     #define LORA_IRQ    11  // DIO1
+     #define LORA_RXEN   10  
+     #define LORA_TXEN   9   
  
-     // --- SPI BUS (FSPI) ---
-     #define LORA_SCK    12  // FSPI CLK
-     #define LORA_MISO   13  // FSPI Q
-     #define LORA_MOSI   11  // FSPI D
+     // --- SPI BUS (Hardware FSPI) ---
+     #define LORA_SCK    47  
+     #define LORA_MISO   14  
+     #define LORA_MOSI   21  
  
      // --- GPS (GY-GPS6MV2 / NEO-6M) ---
+     // RX контроллера (18) подключен к TX модуля GPS
      #define GPS_RX      18  
      #define GPS_TX      17  
  #endif
@@ -113,7 +111,7 @@
  // СЕКЦИЯ 3: Глобальные настройки (Общие для всех плат)
  // ==========================================================
  
- // --- ОПЦИИ ИНТЕРФЕЙСА (Рефакторинг UI) ---
+ // --- ОПЦИИ ИНТЕРФЕЙСА (Рефакторинг UI v1.20) ---
  #define HAS_DISPLAY     1  // 1 - включить код OLED дисплея, 0 - вырезать
  #define HAS_STATUS_LED  1  // 1 - включить код статус-светодиода, 0 - вырезать
  
@@ -126,7 +124,7 @@
  #define MIN_GREETING_NODEINFO_JITTER 120000
  #define MAX_GREETING_NODEINFO_JITTER 300000
  
- // --- НАСТРОЙКИ АДАПТИВНОЙ ОТПРАВКИ КООРДИНАТ ---
+ // --- НАСТРОЙКИ АДАПТИВНОЙ ОТПРАВКИ КООРДИНАТ (v1.18) ---
  #define MIN_MOVEMENT_METERS    15.0f  // Порог дистанции для фиксации движения (защита от дрейфа)
  #define MIN_SPEED_KMPH         2.0f   // Минимальная скорость для подтверждения движения (защита от дрейфа)
  #define SNEAK_MOVEMENT_METERS  40.0f  // Дистанция безусловной отправки (для медленного движения/крадущегося)
@@ -138,9 +136,9 @@
  #define MAX_DIRECT_CONNECT_METERS 200.0f 
  #define MIN_RELAY_DISTANCE_METERS 20.0f  // Минимальная дистанция до узла для участия в векторной ретрансляции
  #define TOPOLOGY_UPDATE_INTERVAL_MS 15000 
- #define TRACKER_FAST_SPEED_KMPH 5.0f     // Порог скорости (Бег/Езда) для отключения ретрансляции у Трекера
+ #define TRACKER_FAST_SPEED_KMPH 5.0f     // Порог скорости (Бег/Езда) для отключения ретрансляции у Трекера (v1.18)
  
- // --- СТАТИЧЕСКАЯ ПОЗИЦИЯ И ДЖИТТЕР (РОЛИ) ---
+ // --- СТАТИЧЕСКАЯ ПОЗИЦИЯ И ДЖИТТЕР (РОЛИ v1.19) ---
  #define RELAY_STATIC_LAT 0.0f
  #define RELAY_STATIC_LON 0.0f
  

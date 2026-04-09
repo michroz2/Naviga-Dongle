@@ -1,7 +1,7 @@
 /**
- * Project: Naviga-Dongle (T-Beam v1.1 Custom E22 + Universal GPS)
+ * Project: Naviga-Dongle (T-Beam v1.1 / T-Energy S3 + Custom E22 + GPS)
  * File: main.cpp
- * Version: 1.20 Изменение: Рефакторинг UI (Шаг 1.3) — перенос логики представления строк и LED в DisplayManager.
+ * Version: 1.24 Изменение: Внедрен жесткий аппаратный сброс LoRa до запуска SPI (Защита от глитчей).
  * Description: Главный файл оркестратора.
  */
 
@@ -23,11 +23,10 @@
  
  // --- НАСТРОЙКИ СКАНИРОВАНИЯ ---
  uint32_t networkScanDuration = 30000; 
- #define RED_LED_PIN 4                 
  
  uint8_t myNodeId = 0; 
  uint8_t myMsgSeq = 0;
- uint8_t myNodeType = NODE_RELAY; // Для тестирования включена роль Ретранслятора
+ uint8_t myNodeType = NODE_RELAY; // Ролевая модель (NODE_TRACKER, NODE_STALKER, NODE_RELAY)
  
  PowerManager power;                                      
  DisplayManager display(0x3c, I2C_SDA, I2C_SCL); 
@@ -56,6 +55,7 @@
  
  bool isLonScaleSet = false;                            
  
+ // Единый вычислитель Джиттера с учетом ролей (v1.19)
  uint32_t calculateRelayJitter(uint8_t myRole, uint8_t senderRole, float snr) {
      uint32_t minMs, maxMs;
      
@@ -67,6 +67,7 @@
          maxMs = STALKER_JITTER_MAX_MS;
      }
  
+     // VIP-пакет (от Трекера): сдвигаем окно вниз
      if (senderRole == NODE_TRACKER) {
          maxMs /= 2;
          if (maxMs < minMs) maxMs = minMs; 
@@ -126,8 +127,7 @@
  void scanNetworkForUniqueId() {
      LOG_INFO("SYS", "Starting network scan for %d ms...", networkScanDuration);
      
-     pinMode(RED_LED_PIN, OUTPUT);
-     digitalWrite(RED_LED_PIN, LOW); 
+     display.toggleLed();
      
      uint32_t scanStart = millis();
      uint32_t lastDispUpdate = 0;
@@ -169,7 +169,7 @@
          gps.update(); 
      } 
      
-     digitalWrite(RED_LED_PIN, HIGH); 
+     display.toggleLed();
      
      randomSeed(esp_random());
      do {
@@ -190,19 +190,28 @@
      while (!Serial && (millis() - start < 3000)); 
      LOG_INFO("SYS", "--- DONGLE BOOT START ---");
      
+     #ifdef BOARD_T_BEAM_V11
      pinMode(LORA_ONBOARD_CS, OUTPUT);
      digitalWrite(LORA_ONBOARD_CS, HIGH);
-     
-     // ИЗМЕНЕНИЕ 1.20: Удалена прямая инициализация LED_PIN. Теперь это делает display.init()
+     #endif
+ 
+     // ИЗМЕНЕНИЕ 1.24: Жесткий аппаратный сброс LoRa-модуля ДО инициализации SPI.
+     // Сбрасывает конечный автомат SX1268, предотвращая зависание из-за глитчей на шине.
+     pinMode(LORA_RST, OUTPUT);
+     digitalWrite(LORA_RST, LOW);
+     delay(20);  
+     digitalWrite(LORA_RST, HIGH);
+     delay(50);  
  
      Wire.begin(I2C_SDA, I2C_SCL);                       
      SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS); 
      
      power.init();
-     display.init(); 
+     display.init(); // Инициализирует OLED и LED (если HAS_STATUS_LED)
      display.showLogo();
      gps.init(updateScreenCb, cycleGpsPowerCb); 
      
+     // Активация статических координат для Ретранслятора (v1.19)
      if (myNodeType == NODE_RELAY) {
          gps.setStaticLocation(RELAY_STATIC_LAT, RELAY_STATIC_LON);
      }
@@ -227,8 +236,10 @@
     uint32_t currentMillis = millis();
     float currentSpeed = gps.getSpeed();
  
+    // Флаг для отключения тяжелой математики, если Трекер бежит (v1.18)
     bool isFastTracker = (myNodeType == NODE_TRACKER && currentSpeed > TRACKER_FAST_SPEED_KMPH);
  
+    // --- Обновление топологии по таймеру ---
     if (gps.isValid() && (currentMillis - lastTopologyUpdateTime > TOPOLOGY_UPDATE_INTERVAL_MS)) {
         if (isFastTracker) {
             LOG_INFO("SYS", "Topology sync skipped: Tracker is running.");
@@ -303,6 +314,7 @@
                          LOG_WARN("LORA", "Invalid packet format/size! Type: %d, Len: %d", rxHeader.getType(), payloadLen);
                      } else if (router.isDuplicate(rxHeader.senderId, rxHeader.msgSeq)) {
                          
+                         // Умная отмена ретрансляции на основе векторов
                          if (!nodeDB.hasNodesInOppositeDirection(rxHeader.relayId)) {
                              LOG_INFO("QUEUE", "Relayer %d has no opposite nodes. Aborting our relay job for Seq %d.", rxHeader.relayId, rxHeader.msgSeq);
                              txManager.abortRelay(rxHeader.senderId, rxHeader.msgSeq);
@@ -331,6 +343,7 @@
                                  senderRole = senderNode->type;
                              }
                              
+                             // Расчет джиттера до помещения в очередь (v1.19)
                              uint32_t calculatedJitter = calculateRelayJitter(myNodeType, senderRole, currentSNR);
                              txManager.enqueueRelay(rxHeader, rxBuffer + sizeof(NavigaHeader), payloadLen, calculatedJitter);
                          } 
@@ -374,12 +387,11 @@
  
      txManager.processQueue();
  
-     // --- Секундный блок ---
+     // --- Секундный блок (Пинг экрана и пересчет геометрии) ---
      if (millis() - lastGpsLogTime >= gpsUpdateInterval) { 
          lastGpsLogTime = millis();
          
-         // ИЗМЕНЕНИЕ 1.20: Инкапсулированный вызов LED
-         display.toggleLed(); 
+         display.toggleLed(); // Инкапсулированный вызов (v1.20)
          
          int sats = gps.getSatellites();
  
@@ -420,7 +432,7 @@
              } 
          } 
  
-         // ИЗМЕНЕНИЕ 1.20: Делегирование сборки и вывода UI менеджеру дисплея
+         // Делегирование сборки и вывода UI (v1.20)
          int targetDist = isTargetValid ? (int)targetNode->distance : 0;
          int targetAzimuth = isTargetValid ? (int)targetNode->azimuth : 0;
          int targetQuality = isTargetValid ? getConnectionQuality(targetNode->nodeId) : 0;
