@@ -1,7 +1,7 @@
 /**
  * File: RadioManager.h
- * Version: 1.0.0
- * Description: Изолированный класс для управления радиомодулем LoRa (SX1268).
+ * Version: 1.22 Изменение: Унификация для чипа SX1268 на обеих аппаратных платформах.
+ * Description: Изолированный класс для управления радиомодулем LoRa.
  */
  #ifndef RADIO_MANAGER_H
  #define RADIO_MANAGER_H
@@ -27,7 +27,14 @@
  
  private:
      Module* _mod;
+ 
+     // Инициализация класса из RadioLib на основе конфигурации платы
+ #ifdef LORA_CHIP_SX1268
      SX1268 _radio;
+ #elif defined(LORA_CHIP_SX1278)
+     SX1278 _radio; // Оставлено для будущей совместимости, если потребуется E32
+ #endif
+ 
  };
  
  #endif // RADIO_MANAGER_H
