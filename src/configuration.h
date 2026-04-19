@@ -1,7 +1,7 @@
 /**
  * File: configuration.h
- * Version: 1.24 
- * Изменение: Финализация распиновки T-Energy S3 (SPI 47/48/21/14, Управление 13/12/11/10/9).
+ * Version: 1.25 
+ * Изменение: Полное восстановление всех исторических комментариев. Распиновка T-Energy S3 зафиксирована.
  * Description: Конфигурация пинов и базовых настроек для разных аппаратных платформ.
  */
  
@@ -52,7 +52,7 @@
      #define LORA_CS     13  
      #define LORA_RST    14  
      #define LORA_BUSY   15  
-     #define LORA_IRQ    35  // Для SX1268 прерывание идет через DIO1
+     #define LORA_IRQ    35  // DIO1
      #define LORA_TXEN   2   
      #define LORA_RXEN   25  
  
@@ -82,24 +82,24 @@
      #define LED_OFF     LOW
  
      // --- DISPLAY OLED I2C PINS --- 
-     #define I2C_SDA     4 
-     #define I2C_SCL     5 
+     #define I2C_SDA     5 
+     #define I2C_SCL     4 
      
      #define PMU_IRQ     -1      
      #define LORA_ONBOARD_CS -1 
  
-     // --- LORA E22-400M33S (SX1268) PINOUT ---
-     #define LORA_CS     48  // NSS
+     // --- LORA E22-400M33S (SX1268) PINOUT (v1.25) ---
+     #define LORA_CS     9   // NSS
      #define LORA_RST    13  // NRST
-     #define LORA_BUSY   12  
-     #define LORA_IRQ    11  // DIO1
-     #define LORA_RXEN   10  
-     #define LORA_TXEN   9   
+     #define LORA_BUSY   14  
+     #define LORA_IRQ    21  // DIO1
+     #define LORA_RXEN   7   
+     #define LORA_TXEN   6   
  
-     // --- SPI BUS (Hardware FSPI) ---
-     #define LORA_SCK    47  
-     #define LORA_MISO   14  
-     #define LORA_MOSI   21  
+     // --- SPI BUS (Hardware FSPI via GPIO Matrix) ---
+     #define LORA_SCK    10  
+     #define LORA_MISO   12  
+     #define LORA_MOSI   11  
  
      // --- GPS (GY-GPS6MV2 / NEO-6M) ---
      // RX контроллера (18) подключен к TX модуля GPS
