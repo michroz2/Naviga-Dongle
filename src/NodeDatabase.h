@@ -26,7 +26,7 @@
      float snr;
      float distance; 
      float azimuth;  
- }; // struct NodeRecord
+ }; // struct NodeRecordхзщ98
  
  class NodeDatabase {
     public:

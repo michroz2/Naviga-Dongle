@@ -1,7 +1,8 @@
 /**
  * Project: Naviga-Dongle (T-Beam v1.1 / T-Energy S3 + Custom E22 + GPS)
  * File: main.cpp
- * Version: 1.24 Изменение: Внедрен жесткий аппаратный сброс LoRa до запуска SPI (Защита от глитчей).
+ * Version: 1.26 
+ * Изменение: Интеграция BleManager. Гибридная обработка команд смартфона в главном потоке (UC-02).
  * Description: Главный файл оркестратора.
  */
 
@@ -20,13 +21,14 @@
  #include "PowerManager.h"     
  #include "PacketManager.h"    
  #include "TxManager.h"        
+ #include "BleManager.h"       
  
  // --- НАСТРОЙКИ СКАНИРОВАНИЯ ---
  uint32_t networkScanDuration = 30000; 
  
  uint8_t myNodeId = 0; 
  uint8_t myMsgSeq = 0;
- uint8_t myNodeType = NODE_RELAY; // Ролевая модель (NODE_TRACKER, NODE_STALKER, NODE_RELAY)
+ uint8_t myNodeType = NODE_RELAY; 
  
  PowerManager power;                                      
  DisplayManager display(0x3c, I2C_SDA, I2C_SCL); 
@@ -37,6 +39,7 @@
  Retranslation router;                                  
  PacketManager packetManager(nodeDB, gps, packer);
  TxManager txManager(radio, packer, myNodeId, myMsgSeq);
+ BleManager bleManager;                                 
  
  volatile bool receivedFlag = false;                    
  
@@ -55,7 +58,6 @@
  
  bool isLonScaleSet = false;                            
  
- // Единый вычислитель Джиттера с учетом ролей (v1.19)
  uint32_t calculateRelayJitter(uint8_t myRole, uint8_t senderRole, float snr) {
      uint32_t minMs, maxMs;
      
@@ -67,7 +69,6 @@
          maxMs = STALKER_JITTER_MAX_MS;
      }
  
-     // VIP-пакет (от Трекера): сдвигаем окно вниз
      if (senderRole == NODE_TRACKER) {
          maxMs /= 2;
          if (maxMs < minMs) maxMs = minMs; 
@@ -195,8 +196,6 @@
      digitalWrite(LORA_ONBOARD_CS, HIGH);
      #endif
  
-     // ИЗМЕНЕНИЕ 1.24: Жесткий аппаратный сброс LoRa-модуля ДО инициализации SPI.
-     // Сбрасывает конечный автомат SX1268, предотвращая зависание из-за глитчей на шине.
      pinMode(LORA_RST, OUTPUT);
      digitalWrite(LORA_RST, LOW);
      delay(20);  
@@ -207,11 +206,12 @@
      SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS); 
      
      power.init();
-     display.init(); // Инициализирует OLED и LED (если HAS_STATUS_LED)
+     display.init(); 
      display.showLogo();
      gps.init(updateScreenCb, cycleGpsPowerCb); 
+ 
+     bleManager.init();
      
-     // Активация статических координат для Ретранслятора (v1.19)
      if (myNodeType == NODE_RELAY) {
          gps.setStaticLocation(RELAY_STATIC_LAT, RELAY_STATIC_LON);
      }
@@ -233,13 +233,72 @@
  } 
  
  void loop() {
-    uint32_t currentMillis = millis();
-    float currentSpeed = gps.getSpeed();
+     uint32_t currentMillis = millis();
+     float currentSpeed = gps.getSpeed();
  
-    // Флаг для отключения тяжелой математики, если Трекер бежит (v1.18)
+     // ==========================================================
+     // ИЗМЕНЕНИЕ 1.26: ОБРАБОТКА КОМАНД ОТ СМАРТФОНА (BLE FLAGS)
+     // ==========================================================
+     if (bleManager.requestFullSync) {
+         bleManager.requestFullSync = false;
+         for (int i = 1; i < 255; i++) {
+             const NodeRecord* node = nodeDB.getNode(i);
+             if (node != nullptr && node->isActive) {
+                 BleEvtNodeUpdate update;
+                 update.opCode = EVT_NODE_UPDATE;
+                 update.nodeId = node->nodeId;
+                 update.nodeRole = node->type;
+                 // ИСПРАВЛЕНИЕ: Используем nodeName вместо name
+                 strncpy(update.nodeName, node->nodeName, sizeof(update.nodeName)-1);
+                 update.nodeName[sizeof(update.nodeName)-1] = '\0';
+                 update.lat = node->lat;
+                 update.lon = node->lon;
+                 update.distance = node->distance;
+                 update.azimuth = node->azimuth;
+                 update.snr = node->snr;
+                 update.lastSeenAge = millis() - node->lastSeen;
+                 
+                 bleManager.sendNodeUpdate(update);
+                 delay(5); 
+             }
+         }
+         LOG_INFO("BLE", "Full topology sync sent to Smartphone");
+     }
+ 
+     if (bleManager.hasNewIdentity) {
+         bleManager.hasNewIdentity = false;
+         myNodeId = bleManager.newIdentity.myNodeId;
+         myNodeType = bleManager.newIdentity.myRole;
+         
+         txManager.sendNodeInfo(bleManager.newIdentity.myName, myNodeType, TX_CRITICAL);
+         nodeDB.updateNodeInfo(myNodeId, bleManager.newIdentity.myName, myNodeType);
+         LOG_INFO("BLE", "Identity updated from App (ID: %d, Role: %d)", myNodeId, myNodeType);
+     }
+ 
+     if (bleManager.hasNewSysConfig) {
+         bleManager.hasNewSysConfig = false;
+         LOG_INFO("BLE", "SysConfig received from App (Waiting for refactoring to variables)");
+     }
+ 
+     if (bleManager.requestClearDB) {
+         bleManager.requestClearDB = false;
+         for (int i = 1; i < 255; i++) {
+             if (i != myNodeId) {
+                 nodeDB.removeNode(i);
+             }
+         }
+         LOG_INFO("BLE", "Node database cleared via App command");
+     }
+ 
+     if (bleManager.requestReset) {
+         LOG_INFO("BLE", "Executing Hard Reset via App Command...");
+         delay(500);
+         ESP.restart();
+     }
+     // ==========================================================
+ 
     bool isFastTracker = (myNodeType == NODE_TRACKER && currentSpeed > TRACKER_FAST_SPEED_KMPH);
  
-    // --- Обновление топологии по таймеру ---
     if (gps.isValid() && (currentMillis - lastTopologyUpdateTime > TOPOLOGY_UPDATE_INTERVAL_MS)) {
         if (isFastTracker) {
             LOG_INFO("SYS", "Topology sync skipped: Tracker is running.");
@@ -309,12 +368,10 @@
                      } 
  
                      if (isOwnEcho) {
-                         // do nothing
                      } else if (!router.isValidPacket(rxHeader.getType(), payloadLen)) {
                          LOG_WARN("LORA", "Invalid packet format/size! Type: %d, Len: %d", rxHeader.getType(), payloadLen);
                      } else if (router.isDuplicate(rxHeader.senderId, rxHeader.msgSeq)) {
                          
-                         // Умная отмена ретрансляции на основе векторов
                          if (!nodeDB.hasNodesInOppositeDirection(rxHeader.relayId)) {
                              LOG_INFO("QUEUE", "Relayer %d has no opposite nodes. Aborting our relay job for Seq %d.", rxHeader.relayId, rxHeader.msgSeq);
                              txManager.abortRelay(rxHeader.senderId, rxHeader.msgSeq);
@@ -329,11 +386,30 @@
                             bool isNewNode = !nodeDB.isNodeActive(rxHeader.senderId);
                             packetManager.processPacket(rxHeader, rxBuffer + sizeof(NavigaHeader));
  
+                            const NodeRecord* updatedNode = nodeDB.getNode(rxHeader.senderId);
+                            if (updatedNode != nullptr) {
+                                BleEvtNodeUpdate update;
+                                update.opCode = EVT_NODE_UPDATE;
+                                update.nodeId = updatedNode->nodeId;
+                                update.nodeRole = updatedNode->type;
+                                // ИСПРАВЛЕНИЕ: Используем nodeName вместо name
+                                strncpy(update.nodeName, updatedNode->nodeName, sizeof(update.nodeName)-1);
+                                update.nodeName[sizeof(update.nodeName)-1] = '\0';
+                                update.lat = updatedNode->lat;
+                                update.lon = updatedNode->lon;
+                                update.distance = updatedNode->distance;
+                                update.azimuth = updatedNode->azimuth;
+                                update.snr = updatedNode->snr;
+                                update.lastSeenAge = millis() - updatedNode->lastSeen;
+                                
+                                bleManager.sendNodeUpdate(update);
+                            }
+ 
                             if (isNewNode && rxHeader.senderId != myNodeId) {
                                 uint32_t currentMillis = millis();
                                 uint32_t jitterMs = random(MIN_GREETING_NODEINFO_JITTER, MAX_GREETING_NODEINFO_JITTER); 
                                 lastHeartbeatTime = currentMillis - HEARTBEAT_INTERVAL_MS + jitterMs;
-                                LOG_INFO("SYS", "New Node %d discovered! NodeInfo reply (batching) scheduled in %d sec", rxHeader.senderId, jitterMs / 1000);
+                                LOG_INFO("SYS", "New Node %d discovered! NodeInfo reply scheduled", rxHeader.senderId);
                             } 
  
                          if (router.shouldRetransmit(rxHeader, nodeDB, myNodeType, currentSpeed)) {
@@ -343,7 +419,6 @@
                                  senderRole = senderNode->type;
                              }
                              
-                             // Расчет джиттера до помещения в очередь (v1.19)
                              uint32_t calculatedJitter = calculateRelayJitter(myNodeType, senderRole, currentSNR);
                              txManager.enqueueRelay(rxHeader, rxBuffer + sizeof(NavigaHeader), payloadLen, calculatedJitter);
                          } 
@@ -370,7 +445,7 @@
         if (shouldTransmit && (now - lastTxTime >= TX_INTERVAL_MOVING)) {
             txManager.sendCoords(gps.getLat(), gps.getLon(), TX_HIGH);
             nodeDB.updateNodeCoords(myNodeId, gps.getLat(), gps.getLon(), 0); 
-            LOG_INFO("ACTION", "Adaptive TX (Moving): Dist: %.1fm, Speed: %.1fkm/h", distFromLastTx, currentSpeed);
+            LOG_INFO("ACTION", "Adaptive TX (Moving): Dist: %.1fm", distFromLastTx);
             lastTxTime = now;
         } else if (now - lastTxTime >= TX_INTERVAL_STILL) {
             txManager.sendCoords(gps.getLat(), gps.getLon(), TX_HIGH);
@@ -387,11 +462,10 @@
  
      txManager.processQueue();
  
-     // --- Секундный блок (Пинг экрана и пересчет геометрии) ---
      if (millis() - lastGpsLogTime >= gpsUpdateInterval) { 
          lastGpsLogTime = millis();
          
-         display.toggleLed(); // Инкапсулированный вызов (v1.20)
+         display.toggleLed(); 
          
          int sats = gps.getSatellites();
  
@@ -432,13 +506,15 @@
              } 
          } 
  
-         // Делегирование сборки и вывода UI (v1.20)
          int targetDist = isTargetValid ? (int)targetNode->distance : 0;
          int targetAzimuth = isTargetValid ? (int)targetNode->azimuth : 0;
          int targetQuality = isTargetValid ? getConnectionQuality(targetNode->nodeId) : 0;
  
+         BleStatus currentBleStatus = bleManager.getBleStatus();
+ 
          display.updateMainScreen(gps.isValid(), sats, myNodeId, myMsgSeq, 
                                   nodeDB.getActiveNodesCount(), isTargetValid, currentTargetId, 
-                                  targetDist, targetAzimuth, targetQuality); 
+                                  targetDist, targetAzimuth, targetQuality, 
+                                  currentBleStatus); 
      } 
  }
