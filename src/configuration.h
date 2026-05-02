@@ -1,7 +1,7 @@
 /**
  * File: configuration.h
- * Version: 1.25 
- * Изменение: Полное восстановление всех исторических комментариев. Распиновка T-Energy S3 зафиксирована.
+ * Version: 1.27 
+ * Изменение: Перенос пользовательских таймеров и ролей в структуру NavigaSettings (UC-03).
  * Description: Конфигурация пинов и базовых настроек для разных аппаратных платформ.
  */
  
@@ -128,8 +128,6 @@
  #define MIN_MOVEMENT_METERS    15.0f  // Порог дистанции для фиксации движения (защита от дрейфа)
  #define MIN_SPEED_KMPH         2.0f   // Минимальная скорость для подтверждения движения (защита от дрейфа)
  #define SNEAK_MOVEMENT_METERS  40.0f  // Дистанция безусловной отправки (для медленного движения/крадущегося)
- #define TX_INTERVAL_MOVING     5000   // Максимальная частота отправки в движении (5 сек)
- #define TX_INTERVAL_STILL      300000 // Редкий пинг на стоянке (5 минут)
  
  // --- НАСТРОЙКИ СЕТИ И РОЛЕЙ ---
  #define DEFAULT_TTL 3 
@@ -146,5 +144,27 @@
  #define RELAY_JITTER_MAX_MS 600
  #define STALKER_JITTER_MIN_MS 300
  #define STALKER_JITTER_MAX_MS 1000
+
+ // ==========================================================
+ // НАСТРОЙКИ ПО УМОЛЧАНИЮ (При первом запуске) И ЯДРО НАСТРОЕК (v1.27)
+ // ==========================================================
+ #define DEFAULT_NODE_ID               0
+ #define DEFAULT_NODE_TYPE             1            // 1 - NODE_STALKER
+ #define DEFAULT_NODE_NAME             "Naviga-Node"
+ #define DEFAULT_TX_INTERVAL_MOVING    5000         // 5 сек
+ #define DEFAULT_TX_INTERVAL_STILL     300000       // 5 минут
+ #define DEFAULT_NODE_CONN_TIMEOUT     30000        // 30 сек (потеря связи)
+ #define DEFAULT_NODE_ACTIVE_TIMEOUT   600000       // 10 минут (очистка из базы)
+
+ struct NavigaSettings {
+     uint8_t nodeId;
+     uint8_t nodeType;
+     char nodeName[12];
+     uint32_t txIntervalMoving;
+     uint32_t txIntervalStill;
+     uint32_t nodeConnectionTimeout; 
+     uint32_t nodeActiveTimeoutMs;   
+     bool isConfigured; 
+ };
  
  #endif // CONFIGURATION_H

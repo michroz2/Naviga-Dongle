@@ -54,7 +54,10 @@
     
     // НОВОЕ: Векторный фильтр
     bool hasNodesInOppositeDirection(uint8_t referenceNodeId) const;
-    
+
+    // Искусственное старение узлов (сдвиг lastSeen в прошлое) для Warm Start
+    void ageAllNodes(uint32_t ageMs);
+
  private:
      NodeRecord nodes[MAX_NODES];
 

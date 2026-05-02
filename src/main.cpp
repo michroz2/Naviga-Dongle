@@ -1,8 +1,8 @@
 /**
  * Project: Naviga-Dongle (T-Beam v1.1 / T-Energy S3 + Custom E22 + GPS)
  * File: main.cpp
- * Version: 1.26 
- * Изменение: Интеграция BleManager. Гибридная обработка команд смартфона в главном потоке (UC-02).
+ * Version: 1.28 
+ * Изменение: Возвращен немой период (Silent Mode) для Warm Start и искусственное старение базы (UC-03).
  * Description: Главный файл оркестратора.
  */
 
@@ -22,6 +22,7 @@
  #include "PacketManager.h"    
  #include "TxManager.h"        
  #include "BleManager.h"       
+ #include "SettingsManager.h"  
  
  // --- НАСТРОЙКИ СКАНИРОВАНИЯ ---
  uint32_t networkScanDuration = 30000; 
@@ -85,7 +86,8 @@
  
      const NodeRecord* target = nodeDB.getNode(targetId);
      if (target == nullptr || targetId == 0) return 0;
-     if (millis() - target->lastSeen > 30000) return 0;
+     
+     if (millis() - target->lastSeen > settingsManager.settings.nodeConnectionTimeout) return 0;
      
      if (target->snr <= -99.0f) return 0; 
  
@@ -123,66 +125,83 @@
     
     txManager.sendNodeInfo(myName, myNodeType, TX_CRITICAL);
     nodeDB.updateNodeInfo(myNodeId, myName, myNodeType); 
+ 
+    settingsManager.settings.nodeId = myNodeId;
+    settingsManager.save();
+    settingsManager.saveNodesSnapshot(nodeDB);
  } 
  
- void scanNetworkForUniqueId() {
-     LOG_INFO("SYS", "Starting network scan for %d ms...", networkScanDuration);
-     
-     display.toggleLed();
-     
-     uint32_t scanStart = millis();
-     uint32_t lastDispUpdate = 0;
-     
-     receivedFlag = false;
-     radio.startReceive(); 
-     
-     while (millis() - scanStart < networkScanDuration) {
-         uint32_t now = millis();
-         
-         if (now - lastDispUpdate >= 1000) {
-             lastDispUpdate = now;
-             uint32_t left = (networkScanDuration - (now - scanStart)) / 1000;
-             display.showStatus("Scanning Net...", "Time left: " + String(left) + " s", "Nodes Found: " + String(nodeDB.getActiveNodesCount()), "Please wait...");
-         } 
-         
-         if (receivedFlag) {
-             noInterrupts(); receivedFlag = false; interrupts();
-             
-             size_t len = radio.getPacketLength();
-             if (len >= sizeof(NavigaHeader)) {
-                 uint8_t rxBuffer[256];             
-                 int state = radio.readData(rxBuffer, len); 
-                 if (state == RADIOLIB_ERR_NONE) {
-                     NavigaHeader rxHeader;
-                     memcpy(&rxHeader, rxBuffer, sizeof(NavigaHeader));
-                     size_t payloadLen = len - sizeof(NavigaHeader);
-                     
-                     if (router.isValidPacket(rxHeader.getType(), payloadLen)) {
-                         if (!router.isDuplicate(rxHeader.senderId, rxHeader.msgSeq)) {
-                             packetManager.processPacket(rxHeader, rxBuffer + sizeof(NavigaHeader));
-                         } 
-                     } 
-                 } 
-             } 
-             radio.startReceive();
-         } 
-         
-         gps.update(); 
-     } 
-     
-     display.toggleLed();
-     
-     randomSeed(esp_random());
-     do {
-         myNodeId = random(1, 255);
-     } while (nodeDB.getNode(myNodeId) != nullptr); 
-     
-     nodeDB.addNode(myNodeId); 
-     
-     LOG_INFO("SYS", "Scan complete. Selected unique Node ID: %d", myNodeId);
-     display.showStatus("Scan Complete", "My new ID:", String(myNodeId), "Starting...");
-     delay(2000);
- } 
+// ИЗМЕНЕНИЕ 1.28: Универсальная функция сканирования/немого периода
+void scanNetwork(bool isWarmStart) {
+    if (isWarmStart) {
+        LOG_INFO("SYS", "Warm Start: Silent listening for %d ms...", networkScanDuration);
+    } else {
+        LOG_INFO("SYS", "Cold Start: Scanning for %d ms...", networkScanDuration);
+    }
+    
+    display.toggleLed();
+    
+    uint32_t scanStart = millis();
+    uint32_t lastDispUpdate = 0;
+    
+    receivedFlag = false;
+    radio.startReceive(); 
+    
+    while (millis() - scanStart < networkScanDuration) {
+        uint32_t now = millis();
+        
+        if (now - lastDispUpdate >= 1000) {
+            lastDispUpdate = now;
+            uint32_t left = (networkScanDuration - (now - scanStart)) / 1000;
+            display.showStatus(isWarmStart ? "Silent Mode..." : "Scanning Net...", 
+                               "Time left: " + String(left) + " s", 
+                               "Nodes Found: " + String(nodeDB.getActiveNodesCount()), 
+                               "Please wait...");
+        } 
+        
+        if (receivedFlag) {
+            noInterrupts(); receivedFlag = false; interrupts();
+            
+            size_t len = radio.getPacketLength();
+            if (len >= sizeof(NavigaHeader)) {
+                uint8_t rxBuffer[256];             
+                int state = radio.readData(rxBuffer, len); 
+                if (state == RADIOLIB_ERR_NONE) {
+                    NavigaHeader rxHeader;
+                    memcpy(&rxHeader, rxBuffer, sizeof(NavigaHeader));
+                    size_t payloadLen = len - sizeof(NavigaHeader);
+                    
+                    if (router.isValidPacket(rxHeader.getType(), payloadLen)) {
+                        if (!router.isDuplicate(rxHeader.senderId, rxHeader.msgSeq)) {
+                            packetManager.processPacket(rxHeader, rxBuffer + sizeof(NavigaHeader));
+                        } 
+                    } 
+                } 
+            } 
+            radio.startReceive();
+        } 
+        
+        gps.update(); 
+    } 
+    
+    display.toggleLed();
+    
+    // Если это Cold Start (или у нас почему-то нет ID), генерируем новый
+    if (!isWarmStart || myNodeId == 0) {
+        randomSeed(esp_random());
+        do {
+            myNodeId = random(1, 255);
+        } while (nodeDB.getNode(myNodeId) != nullptr); 
+        
+        nodeDB.addNode(myNodeId); 
+        LOG_INFO("SYS", "Scan complete. Selected unique Node ID: %d", myNodeId);
+    } else {
+        LOG_INFO("SYS", "Silent listening complete. Kept Node ID: %d", myNodeId);
+    }
+    
+    display.showStatus("Scan Complete", "My ID:", String(myNodeId), "Starting...");
+    delay(2000);
+}
  
  void setup() {
      delay(500); 
@@ -212,6 +231,23 @@
  
      bleManager.init();
      
+     settingsManager.init();
+     myNodeId = settingsManager.settings.nodeId;
+     myNodeType = settingsManager.settings.nodeType;
+ 
+     settingsManager.loadNodesSnapshot(nodeDB);
+ 
+     // ИЗМЕНЕНИЕ 1.28: Старим все восстановленные узлы, чтобы они стали "серыми" (timeout + 1 секунда)
+     nodeDB.ageAllNodes(settingsManager.settings.nodeConnectionTimeout + 1000);
+ 
+     // Гарантируем, что наш локальный узел свежий и активный поверх слепка
+     char myName[12];
+     strncpy(myName, settingsManager.settings.nodeName, sizeof(myName)-1);
+     myName[sizeof(myName)-1] = '\0';
+     
+     nodeDB.addNode(myNodeId);
+     nodeDB.updateNodeInfo(myNodeId, myName, myNodeType);
+ 
      if (myNodeType == NODE_RELAY) {
          gps.setStaticLocation(RELAY_STATIC_LAT, RELAY_STATIC_LON);
      }
@@ -222,12 +258,17 @@
          delay(3000);
      } 
  
-     scanNetworkForUniqueId();
+     // ИЗМЕНЕНИЕ 1.28: Вызов универсальной функции сканирования (Cold vs Warm)
+     if (myNodeId == 0 || !settingsManager.settings.isConfigured) {
+         scanNetwork(false); // Cold Start
+         settingsManager.settings.nodeId = myNodeId;
+         settingsManager.settings.isConfigured = true;
+         settingsManager.save();
+     } else {
+         scanNetwork(true);  // Warm Start (Silent period)
+     }
      
-     char myName[12];
-     snprintf(myName, sizeof(myName), "Node-%d", myNodeId);
      txManager.sendNodeInfo(myName, myNodeType, TX_NORMAL);
-     nodeDB.updateNodeInfo(myNodeId, myName, myNodeType); 
      
      lastTxTime = millis(); 
  } 
@@ -237,7 +278,7 @@
      float currentSpeed = gps.getSpeed();
  
      // ==========================================================
-     // ИЗМЕНЕНИЕ 1.26: ОБРАБОТКА КОМАНД ОТ СМАРТФОНА (BLE FLAGS)
+     // ОБРАБОТКА КОМАНД ОТ СМАРТФОНА
      // ==========================================================
      if (bleManager.requestFullSync) {
          bleManager.requestFullSync = false;
@@ -248,7 +289,6 @@
                  update.opCode = EVT_NODE_UPDATE;
                  update.nodeId = node->nodeId;
                  update.nodeRole = node->type;
-                 // ИСПРАВЛЕНИЕ: Используем nodeName вместо name
                  strncpy(update.nodeName, node->nodeName, sizeof(update.nodeName)-1);
                  update.nodeName[sizeof(update.nodeName)-1] = '\0';
                  update.lat = node->lat;
@@ -270,14 +310,24 @@
          myNodeId = bleManager.newIdentity.myNodeId;
          myNodeType = bleManager.newIdentity.myRole;
          
-         txManager.sendNodeInfo(bleManager.newIdentity.myName, myNodeType, TX_CRITICAL);
-         nodeDB.updateNodeInfo(myNodeId, bleManager.newIdentity.myName, myNodeType);
-         LOG_INFO("BLE", "Identity updated from App (ID: %d, Role: %d)", myNodeId, myNodeType);
+         settingsManager.settings.nodeId = myNodeId;
+         settingsManager.settings.nodeType = myNodeType;
+         strncpy(settingsManager.settings.nodeName, bleManager.newIdentity.myName, 11);
+         settingsManager.save();
+ 
+         txManager.sendNodeInfo(settingsManager.settings.nodeName, myNodeType, TX_CRITICAL);
+         nodeDB.updateNodeInfo(myNodeId, settingsManager.settings.nodeName, myNodeType);
+         
+         settingsManager.saveNodesSnapshot(nodeDB);
+         LOG_INFO("BLE", "Identity updated from App and saved (ID: %d)", myNodeId);
      }
  
      if (bleManager.hasNewSysConfig) {
          bleManager.hasNewSysConfig = false;
-         LOG_INFO("BLE", "SysConfig received from App (Waiting for refactoring to variables)");
+         settingsManager.settings.txIntervalMoving = bleManager.newSysConfig.txIntervalMoving;
+         settingsManager.settings.txIntervalStill = bleManager.newSysConfig.txIntervalStill;
+         settingsManager.save();
+         LOG_INFO("BLE", "SysConfig updated from App and saved");
      }
  
      if (bleManager.requestClearDB) {
@@ -287,6 +337,7 @@
                  nodeDB.removeNode(i);
              }
          }
+         settingsManager.saveNodesSnapshot(nodeDB); 
          LOG_INFO("BLE", "Node database cleared via App command");
      }
  
@@ -309,17 +360,15 @@
     }
  
     if (currentMillis - lastCleanupTime > CLEANUP_INTERVAL_MS) {
-        nodeDB.cleanup(myNodeId);
+        nodeDB.cleanup(myNodeId); 
         lastCleanupTime = currentMillis;
     } 
  
     if (currentMillis - lastHeartbeatTime > HEARTBEAT_INTERVAL_MS) {
         if (myNodeId != 0) { 
-            char currentName[12];
-            snprintf(currentName, sizeof(currentName), "Node-%d", myNodeId);
-            txManager.sendNodeInfo(currentName, myNodeType, TX_NORMAL);
-            nodeDB.updateNodeInfo(myNodeId, currentName, myNodeType); 
-            LOG_INFO("ACTION", "Heartbeat sent: NodeInfo (Name: %s, Type: %d)", currentName, myNodeType);
+            txManager.sendNodeInfo(settingsManager.settings.nodeName, myNodeType, TX_NORMAL);
+            nodeDB.updateNodeInfo(myNodeId, settingsManager.settings.nodeName, myNodeType); 
+            LOG_INFO("ACTION", "Heartbeat sent: NodeInfo");
         } 
         lastHeartbeatTime = currentMillis;
     } 
@@ -347,14 +396,11 @@
  
                      if (rxHeader.relayId == myNodeId) {
                          isCollision = true;
-                         LOG_WARN("LORA", "Collision Type 1: Relay ID == myNodeId!");
                      } else if (rxHeader.senderId == myNodeId) {
                          int8_t seqDiff = (int8_t)(myMsgSeq - rxHeader.msgSeq);
                          if (seqDiff <= 0 || seqDiff > 10) {
                              isCollision = true;
-                             LOG_WARN("LORA", "Collision Type 2: Seq %d vs my %d (diff: %d)", rxHeader.msgSeq, myMsgSeq, seqDiff);
                          } else {
-                             LOG_INFO("LORA", "Valid echo of our pkt Seq %d", rxHeader.msgSeq);
                              isOwnEcho = true;
                          } 
                      } 
@@ -373,11 +419,8 @@
                      } else if (router.isDuplicate(rxHeader.senderId, rxHeader.msgSeq)) {
                          
                          if (!nodeDB.hasNodesInOppositeDirection(rxHeader.relayId)) {
-                             LOG_INFO("QUEUE", "Relayer %d has no opposite nodes. Aborting our relay job for Seq %d.", rxHeader.relayId, rxHeader.msgSeq);
                              txManager.abortRelay(rxHeader.senderId, rxHeader.msgSeq);
-                         } else {
-                             LOG_INFO("QUEUE", "Nodes exist opposite to relayer %d. Keeping our relay job for Seq %d.", rxHeader.relayId, rxHeader.msgSeq);
-                         }
+                         } 
                          
                      } else {
                          LOG_INFO("LORA", "Valid pkt Type %d from Node %d (Relay: %d, Seq: %d, SNR: %.1f)", 
@@ -392,7 +435,6 @@
                                 update.opCode = EVT_NODE_UPDATE;
                                 update.nodeId = updatedNode->nodeId;
                                 update.nodeRole = updatedNode->type;
-                                // ИСПРАВЛЕНИЕ: Используем nodeName вместо name
                                 strncpy(update.nodeName, updatedNode->nodeName, sizeof(update.nodeName)-1);
                                 update.nodeName[sizeof(update.nodeName)-1] = '\0';
                                 update.lat = updatedNode->lat;
@@ -410,6 +452,8 @@
                                 uint32_t jitterMs = random(MIN_GREETING_NODEINFO_JITTER, MAX_GREETING_NODEINFO_JITTER); 
                                 lastHeartbeatTime = currentMillis - HEARTBEAT_INTERVAL_MS + jitterMs;
                                 LOG_INFO("SYS", "New Node %d discovered! NodeInfo reply scheduled", rxHeader.senderId);
+                                
+                                settingsManager.saveNodesSnapshot(nodeDB);
                             } 
  
                          if (router.shouldRetransmit(rxHeader, nodeDB, myNodeType, currentSpeed)) {
@@ -442,19 +486,19 @@
             shouldTransmit = true;
         } 
  
-        if (shouldTransmit && (now - lastTxTime >= TX_INTERVAL_MOVING)) {
+        if (shouldTransmit && (now - lastTxTime >= settingsManager.settings.txIntervalMoving)) {
             txManager.sendCoords(gps.getLat(), gps.getLon(), TX_HIGH);
             nodeDB.updateNodeCoords(myNodeId, gps.getLat(), gps.getLon(), 0); 
             LOG_INFO("ACTION", "Adaptive TX (Moving): Dist: %.1fm", distFromLastTx);
             lastTxTime = now;
-        } else if (now - lastTxTime >= TX_INTERVAL_STILL) {
+        } else if (now - lastTxTime >= settingsManager.settings.txIntervalStill) {
             txManager.sendCoords(gps.getLat(), gps.getLon(), TX_HIGH);
             nodeDB.updateNodeCoords(myNodeId, gps.getLat(), gps.getLon(), 0);
             LOG_INFO("ACTION", "Adaptive TX (Still Heartbeat)");
             lastTxTime = now;
         } 
     } else {
-        if (millis() - lastTxTime >= TX_INTERVAL_STILL) {
+        if (millis() - lastTxTime >= settingsManager.settings.txIntervalStill) {
             LOG_WARN("TX", "Skip TX: GPS location not valid.");
             lastTxTime = millis(); 
         } 

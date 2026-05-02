@@ -1,12 +1,14 @@
 /**
  * File: NodeDatabase.cpp
- * Version: 1.17 Изменение: Реализация сбора квадрантов в updateTopology и метода hasNodesInOppositeDirection.
+ * Version: 1.27 
+ * Изменение: Подключение SettingsManager. Функция cleanup теперь использует динамический таймаут из NVS.
  * Description: Реализация базы данных узлов.
  */
  #include "NodeDatabase.h"
-#include "logger.h"
-#include "configuration.h"
-#include <string.h>
+ #include "logger.h"
+ #include "configuration.h"
+ #include "SettingsManager.h" // ИЗМЕНЕНИЕ 1.27: Подключение менеджера настроек
+ #include <string.h>
  
  NodeDatabase::NodeDatabase() {
     _activeNodesCount = 0;
@@ -98,7 +100,8 @@ bool NodeDatabase::isNodeActive(uint8_t nodeId) const {
         uint32_t currentMillis = millis();
         for (int i = 1; i < MAX_NODES; i++) {
             if (i == excludeNodeId) continue;
-            if (nodes[i].isActive && (currentMillis - nodes[i].lastSeen > NODE_TIMEOUT_MS)) {
+            // ИЗМЕНЕНИЕ 1.27: Используем динамический таймаут из NVS
+            if (nodes[i].isActive && (currentMillis - nodes[i].lastSeen > settingsManager.settings.nodeActiveTimeoutMs)) {
                 nodes[i].isActive = false;
                 if (_activeNodesCount > 0) _activeNodesCount--;
                 LOG_INFO("SYS", "Node %d removed by timeout", i);
@@ -109,12 +112,10 @@ bool NodeDatabase::isNodeActive(uint8_t nodeId) const {
 uint8_t NodeDatabase::getActiveNodesCount() const { return _activeNodesCount; }
 float NodeDatabase::getCachedMaxDist() const { return _cachedMaxDist; }
 
-// НОВОЕ: Реализация метода проверки противоположного квадранта
 bool NodeDatabase::hasNodesInOppositeDirection(uint8_t referenceNodeId) const {
     if (referenceNodeId == 0 || referenceNodeId >= MAX_NODES) return true;
     if (!nodes[referenceNodeId].isActive) return true;
     
-    // Если мы еще не знаем координат узла, пропускаем (разрешаем), чтобы не сломать первичный обмен
     if (nodes[referenceNodeId].distance == 0.0f && nodes[referenceNodeId].lat == 0.0f) return true; 
 
     int senderQ = (int)(nodes[referenceNodeId].azimuth / 90.0f) % 4;
@@ -137,7 +138,6 @@ void NodeDatabase::updateTopology() {
                 maxD = nodes[i].distance;
             }
             
-            // Заселяем квадранты только узлами, которые достаточно далеко (не толпятся)
             if (nodes[i].distance >= MIN_RELAY_DISTANCE_METERS) {
                 int q = (int)(nodes[i].azimuth / 90.0f) % 4;
                 if (q >= 0 && q < 4) {
@@ -152,4 +152,18 @@ void NodeDatabase::updateTopology() {
     
     LOG_INFO("SYS", "Topology sync: Nodes: %d, MaxDist: %.1fm. Q:[%d,%d,%d,%d]", 
              _activeNodesCount, _cachedMaxDist, _quadrantNodes[0], _quadrantNodes[1], _quadrantNodes[2], _quadrantNodes[3]);
+}
+
+void NodeDatabase::ageAllNodes(uint32_t ageMs) {
+    uint32_t currentMillis = millis();
+    for (int i = 1; i < MAX_NODES; i++) {
+        if (nodes[i].isActive) {
+            // Защита от переполнения
+            if (currentMillis >= ageMs) {
+                nodes[i].lastSeen = currentMillis - ageMs;
+            } else {
+                nodes[i].lastSeen = 0;
+            }
+        }
+    }
 }
