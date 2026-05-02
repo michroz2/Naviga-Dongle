@@ -1,7 +1,7 @@
 /**
  * File: BleProtocol.h
- * Version: 1.1 (Draft)
- * Description: Описание структур данных для BLE GATT с разделением Identity и Config.
+ * Version: 1.29
+ * Description: Описание структур данных для BLE GATT с разделением Identity и Config (UC-04 Pairing).
  */
 
  #ifndef BLE_PROTOCOL_H
@@ -55,10 +55,9 @@
      uint32_t txIntervalMoving;  // Интервал TX в движении (мс)
      uint32_t txIntervalStill;   // Интервал TX на стоянке (мс)
      
-     // Место для будущих настроек (можно будет перенести сюда из #define):
-     // uint8_t defaultTtl;
-     // float minMovementMeters;
-     // uint8_t displayTimeoutSec;
+     // ИЗМЕНЕНИЕ 1.29: Добавлены таймауты
+     uint32_t nodeConnectionTimeout; // Таймаут потери связи (мс)
+     uint32_t nodeActiveTimeoutMs;   // Таймаут очистки из базы (мс)
  };
  
  // ==========================================================

@@ -1,7 +1,7 @@
 /**
  * File: BleManager.h
- * Version: 1.26
- * Description: Управление BLE-стеком (NimBLE) и реализация протокола Naviga (UC-02).
+ * Version: 1.29
+ * Description: Управление BLE-стеком (NimBLE) и реализация протокола Naviga (UC-04).
  * Использует гибридную модель (Callbacks -> Флаги -> Основной цикл).
  */
 
@@ -27,7 +27,8 @@
  
      // --- Методы отправки данных в Смартфон (Уведомления / Notify) ---
      void sendIdentity(uint8_t nodeId, const char* name, uint8_t role);
-     void sendSysConfig(uint32_t txMoving, uint32_t txStill);
+     // ИЗМЕНЕНИЕ 1.29: Добавлены таймауты
+     void sendSysConfig(uint32_t txMoving, uint32_t txStill, uint32_t connTimeout, uint32_t activeTimeout);
      void sendNodeUpdate(const BleEvtNodeUpdate& nodeData);
      // TODO: void sendMyStatus(...);
  
@@ -41,6 +42,9 @@
      bool requestFullSync;
      bool requestReset;
      bool requestClearDB;
+     // ИЗМЕНЕНИЕ 1.29: Флаги запроса при спаривании
+     bool requestIdentitySync;
+     bool requestSysConfigSync;
  
  private:
      NimBLEServer* pServer;

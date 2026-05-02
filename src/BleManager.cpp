@@ -1,28 +1,25 @@
 /**
  * File: BleManager.cpp
- * Version: 1.26 (Bugfix NimBLE 2.0.0+)
- * Description: Реализация BLE-менеджера. Исправлены сигнатуры Callbacks и области видимости.
+ * Version: 1.29 
+ * Description: Реализация BLE-менеджера. Интеграция UC-04 (Pairing Sync).
  */
 
  #include "BleManager.h"
- #include "logger.h" // ИСПРАВЛЕНИЕ: Подключен логгер для LOG_INFO и LOG_WARN
+ #include "logger.h" 
  
  // --- Внутренние классы Callbacks ---
- // ИСПРАВЛЕНИЕ: Добавлен префикс BleManager:: для связи с friend-объявлениями в .h файле
  
  class BleManager::ServerCallbacks : public NimBLEServerCallbacks {
      BleManager* _manager;
  public:
      ServerCallbacks(BleManager* manager) : _manager(manager) {}
      
-     // ИСПРАВЛЕНИЕ: Сигнатура NimBLE 2.0.0+ требует параметр NimBLEConnInfo&
      void onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) override {
          _manager->_isConnected = true;
          LOG_INFO("BLE", "Smartphone connected!");
          // NimBLE автоматически останавливает рекламу при подключении
      }
  
-     // ИСПРАВЛЕНИЕ: Сигнатура NimBLE 2.0.0+ требует параметры NimBLEConnInfo& и int reason
      void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) override {
          _manager->_isConnected = false;
          LOG_INFO("BLE", "Smartphone disconnected. Restarting advertising...");
@@ -35,7 +32,6 @@
  public:
      RxCallbacks(BleManager* manager) : _manager(manager) {}
  
-     // ИСПРАВЛЕНИЕ: Сигнатура NimBLE 2.0.0+ требует параметр NimBLEConnInfo&
      void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) override {
          std::string rxValue = pCharacteristic->getValue();
          if (rxValue.length() > 0) {
@@ -62,6 +58,17 @@
                      _manager->requestFullSync = true;
                      LOG_INFO("BLE_RX", "Smartphone requested FULL SYNC (Topology)");
                      break;
+                     
+                 // ИЗМЕНЕНИЕ 1.29: Обработка запросов при первом сопряжении
+                 case CMD_REQ_IDENTITY:
+                     _manager->requestIdentitySync = true;
+                     LOG_INFO("BLE_RX", "App requested Identity Sync (UC-04)");
+                     break;
+                     
+                 case CMD_REQ_SYS_CONFIG:
+                     _manager->requestSysConfigSync = true;
+                     LOG_INFO("BLE_RX", "App requested SysConfig Sync (UC-04)");
+                     break;
  
                  case CMD_ACTION_RESET:
                      _manager->requestReset = true;
@@ -86,7 +93,8 @@
  BleManager::BleManager() : 
      pServer(nullptr), pTxCharacteristic(nullptr), pRxCharacteristic(nullptr),
      _isConnected(false), hasNewIdentity(false), hasNewSysConfig(false),
-     requestFullSync(false), requestReset(false), requestClearDB(false) {}
+     requestFullSync(false), requestReset(false), requestClearDB(false),
+     requestIdentitySync(false), requestSysConfigSync(false) {} // ИЗМЕНЕНИЕ: Инициализация флагов
  
  void BleManager::init() {
      NimBLEDevice::init(BLE_DEVICE_NAME);
@@ -111,13 +119,10 @@
          NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR
      );
      pRxCharacteristic->setCallbacks(new RxCallbacks(this));
- 
-     // ИСПРАВЛЕНИЕ: Удален pService->start() - в новых версиях сервисы стартуют вместе с сервером
      
      // Настройка рекламы (Advertising)
      NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
      pAdvertising->addServiceUUID(SERVICE_UUID);
-     // ИСПРАВЛЕНИЕ: Удален pAdvertising->setScanResponse(true), он включен по умолчанию
      pAdvertising->start();
  
      LOG_INFO("SYS", "BLE Initialized. Advertising started.");
@@ -146,13 +151,16 @@
      pTxCharacteristic->notify();
  }
  
- void BleManager::sendSysConfig(uint32_t txMoving, uint32_t txStill) {
+ // ИЗМЕНЕНИЕ 1.29: Обновленная сигнатура
+ void BleManager::sendSysConfig(uint32_t txMoving, uint32_t txStill, uint32_t connTimeout, uint32_t activeTimeout) {
      if (!_isConnected) return;
  
      BleSysConfig packet;
      packet.opCode = EVT_SYS_CONFIG;
      packet.txIntervalMoving = txMoving;
      packet.txIntervalStill = txStill;
+     packet.nodeConnectionTimeout = connTimeout;
+     packet.nodeActiveTimeoutMs = activeTimeout;
  
      pTxCharacteristic->setValue((uint8_t*)&packet, sizeof(BleSysConfig));
      pTxCharacteristic->notify();

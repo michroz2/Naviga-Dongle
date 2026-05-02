@@ -277,10 +277,33 @@ void scanNetwork(bool isWarmStart) {
      uint32_t currentMillis = millis();
      float currentSpeed = gps.getSpeed();
  
-     // ==========================================================
-     // ОБРАБОТКА КОМАНД ОТ СМАРТФОНА
-     // ==========================================================
-     if (bleManager.requestFullSync) {
+// ==========================================================
+    // ОБРАБОТКА КОМАНД ОТ СМАРТФОНА
+    // ==========================================================
+    
+    // ИЗМЕНЕНИЕ 1.29: Обработка запросов настроек (UC-04 Pairing)
+    if (bleManager.requestIdentitySync) {
+        bleManager.requestIdentitySync = false;
+        bleManager.sendIdentity(
+            settingsManager.settings.nodeId, 
+            settingsManager.settings.nodeName, 
+            settingsManager.settings.nodeType
+        );
+        LOG_INFO("BLE", "Sent Identity config to Smartphone");
+    }
+
+    if (bleManager.requestSysConfigSync) {
+        bleManager.requestSysConfigSync = false;
+        bleManager.sendSysConfig(
+            settingsManager.settings.txIntervalMoving,
+            settingsManager.settings.txIntervalStill,
+            settingsManager.settings.nodeConnectionTimeout,
+            settingsManager.settings.nodeActiveTimeoutMs
+        );
+        LOG_INFO("BLE", "Sent System Config to Smartphone");
+    }
+    
+    if (bleManager.requestFullSync) {
          bleManager.requestFullSync = false;
          for (int i = 1; i < 255; i++) {
              const NodeRecord* node = nodeDB.getNode(i);
@@ -323,13 +346,18 @@ void scanNetwork(bool isWarmStart) {
      }
  
      if (bleManager.hasNewSysConfig) {
-         bleManager.hasNewSysConfig = false;
-         settingsManager.settings.txIntervalMoving = bleManager.newSysConfig.txIntervalMoving;
-         settingsManager.settings.txIntervalStill = bleManager.newSysConfig.txIntervalStill;
-         settingsManager.save();
-         LOG_INFO("BLE", "SysConfig updated from App and saved");
-     }
- 
+        bleManager.hasNewSysConfig = false;
+        settingsManager.settings.txIntervalMoving = bleManager.newSysConfig.txIntervalMoving;
+        settingsManager.settings.txIntervalStill = bleManager.newSysConfig.txIntervalStill;
+        
+        // ИЗМЕНЕНИЕ 1.29: Сохраняем новые таймауты
+        settingsManager.settings.nodeConnectionTimeout = bleManager.newSysConfig.nodeConnectionTimeout;
+        settingsManager.settings.nodeActiveTimeoutMs = bleManager.newSysConfig.nodeActiveTimeoutMs;
+        
+        settingsManager.save();
+        LOG_INFO("BLE", "SysConfig updated from App and saved");
+    }
+     
      if (bleManager.requestClearDB) {
          bleManager.requestClearDB = false;
          for (int i = 1; i < 255; i++) {
