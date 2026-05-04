@@ -1,6 +1,6 @@
 /**
  * File: RadioManager.cpp
- * Version: 1.22 Изменение: Единая конфигурация SX1268 (E22) для плат T-Beam и T-Energy S3.
+ * Version: 1.31 Изменение: Внедрение ручного управления антенным коммутатором (Manual RF Switch).
  * Description: Реализация класса управления LoRa.
  */
  #include "RadioManager.h"
@@ -28,8 +28,16 @@
          _radio.setCurrentLimit(140);        
          _radio.setTCXO(1.8);
          
-         // Эта строка теперь работает для обеих плат, так как T-Energy S3 тоже имеет эти пины
-         _radio.setRfSwitchPins(LORA_RXEN, LORA_TXEN);
+         // ИЗМЕНЕНИЕ 1.31: Отключаем автоматическое управление пинами в RadioLib
+         // _radio.setRfSwitchPins(LORA_RXEN, LORA_TXEN);
+         
+         // Настраиваем пины вручную как OUTPUT
+         pinMode(LORA_RXEN, OUTPUT);
+         pinMode(LORA_TXEN, OUTPUT);
+
+         // Устанавливаем коммутатор в режим приема (LNA открыт) по умолчанию
+         digitalWrite(LORA_RXEN, HIGH);
+         digitalWrite(LORA_TXEN, LOW);
          
          _radio.setRxBoostedGainMode(true);
  #endif
@@ -42,9 +50,35 @@
      return false;
  }
  
- void RadioManager::startReceive() { _radio.startReceive(); }
+ void RadioManager::startReceive() { 
+ #ifdef LORA_CHIP_SX1268
+     // Гарантируем, что коммутатор в режиме приема при ручном перезапуске прослушивания
+     digitalWrite(LORA_TXEN, LOW);
+     digitalWrite(LORA_RXEN, HIGH);
+ #endif
+     _radio.startReceive(); 
+ }
+ 
  void RadioManager::standby() { _radio.standby(); }
  size_t RadioManager::getPacketLength() { return _radio.getPacketLength(); }
  int RadioManager::readData(uint8_t* buffer, size_t len) { return _radio.readData(buffer, len); }
- int RadioManager::transmit(uint8_t* buffer, size_t len) { return _radio.transmit(buffer, len); }
+ 
+ int RadioManager::transmit(uint8_t* buffer, size_t len) { 
+ #ifdef LORA_CHIP_SX1268
+     // ИЗМЕНЕНИЕ 1.31: Мгновенно переключаем антенный коммутатор на передачу (TX)
+     digitalWrite(LORA_RXEN, LOW);
+     digitalWrite(LORA_TXEN, HIGH);
+ #endif
+
+     int state = _radio.transmit(buffer, len); 
+
+ #ifdef LORA_CHIP_SX1268
+     // ИЗМЕНЕНИЕ 1.31: Сразу после завершения отправки возвращаем коммутатор в режим приема (RX)
+     digitalWrite(LORA_TXEN, LOW);
+     digitalWrite(LORA_RXEN, HIGH);
+ #endif
+
+     return state;
+ }
+ 
  float RadioManager::getSNR() { return _radio.getSNR(); }

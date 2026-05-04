@@ -96,38 +96,42 @@
      requestFullSync(false), requestReset(false), requestClearDB(false),
      requestIdentitySync(false), requestSysConfigSync(false) {} // ИЗМЕНЕНИЕ: Инициализация флагов
  
- void BleManager::init() {
-     NimBLEDevice::init(BLE_DEVICE_NAME);
+     void BleManager::init() {
+        NimBLEDevice::init("Naviga-Dongle");
+        
+        pServer = NimBLEDevice::createServer();
+        pServer->setCallbacks(new ServerCallbacks(this));
+    
+        NimBLEService* pService = pServer->createService(SERVICE_UUID);
+    
+        // TX Характеристика (Донгл -> Смартфон)
+        pTxCharacteristic = pService->createCharacteristic(
+            CHARACTERISTIC_UUID_TX,
+            NIMBLE_PROPERTY::NOTIFY
+        );
+    
+        // RX Характеристика (Смартфон -> Донгл)
+        pRxCharacteristic = pService->createCharacteristic(
+            CHARACTERISTIC_UUID_RX,
+            NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR
+        );
+        pRxCharacteristic->setCallbacks(new RxCallbacks(this));
+        
+        // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ ДЛЯ NimBLE 2.0.0+:
+        // Запускаем сам GATT-сервер (вместо устаревшего pService->start())
+        pServer->start(); 
+    
+        // Настройка рекламы (Advertising)
+        NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
+        pAdvertising->setName("Naviga-Dongle"); // Явно указываем имя
+        pAdvertising->addServiceUUID(SERVICE_UUID);
+        
+        // В NimBLE 2.0 Scan Response работает автоматически, флаг больше не нужен
+        pAdvertising->start();
+    
+        LOG_INFO("SYS", "BLE Initialized. Advertising started.");
+    }
      
-     // Оптимизация мощности передатчика BLE для пробиваемости через корпус
-     NimBLEDevice::setPower(ESP_PWR_LVL_P9); 
- 
-     pServer = NimBLEDevice::createServer();
-     pServer->setCallbacks(new ServerCallbacks(this));
- 
-     NimBLEService* pService = pServer->createService(SERVICE_UUID);
- 
-     // TX Характеристика (Донгл -> Смартфон) - Только NOTIFY
-     pTxCharacteristic = pService->createCharacteristic(
-         CHARACTERISTIC_UUID_TX,
-         NIMBLE_PROPERTY::NOTIFY
-     );
- 
-     // RX Характеристика (Смартфон -> Донгл) - Только WRITE
-     pRxCharacteristic = pService->createCharacteristic(
-         CHARACTERISTIC_UUID_RX,
-         NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR
-     );
-     pRxCharacteristic->setCallbacks(new RxCallbacks(this));
-     
-     // Настройка рекламы (Advertising)
-     NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
-     pAdvertising->addServiceUUID(SERVICE_UUID);
-     pAdvertising->start();
- 
-     LOG_INFO("SYS", "BLE Initialized. Advertising started.");
- }
- 
  BleStatus BleManager::getBleStatus() {
      if (_isConnected) return BLE_CONNECTED;
      return BLE_UNPAIRED; 
