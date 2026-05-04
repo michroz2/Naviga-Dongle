@@ -153,12 +153,15 @@ void scanNetwork(bool isWarmStart) {
         if (now - lastDispUpdate >= 1000) {
             lastDispUpdate = now;
             uint32_t left = (networkScanDuration - (now - scanStart)) / 1000;
-            display.showStatus(isWarmStart ? "Silent Mode..." : "Scanning Net...", 
+            
+            // ИЗМЕНЕНИЕ 1.32: На экране сканирования выводим Start-XXXX
+            String startTitle = "Start-" + String(bleManager.macSuffix);
+            display.showStatus(startTitle, 
                                "Time left: " + String(left) + " s", 
                                "Nodes Found: " + String(nodeDB.getActiveNodesCount()), 
                                "Please wait...");
-        } 
-        
+        }
+
         if (receivedFlag) {
             noInterrupts(); receivedFlag = false; interrupts();
             
@@ -357,7 +360,7 @@ void scanNetwork(bool isWarmStart) {
         settingsManager.save();
         LOG_INFO("BLE", "SysConfig updated from App and saved");
     }
-     
+
      if (bleManager.requestClearDB) {
          bleManager.requestClearDB = false;
          for (int i = 1; i < 255; i++) {
@@ -584,9 +587,10 @@ void scanNetwork(bool isWarmStart) {
  
          BleStatus currentBleStatus = bleManager.getBleStatus();
  
-         display.updateMainScreen(gps.isValid(), sats, myNodeId, myMsgSeq, 
+// ИЗМЕНЕНИЕ 1.32: Передаем bleManager.macSuffix первым аргументом
+         display.updateMainScreen(bleManager.macSuffix, gps.isValid(), sats, myNodeId, myMsgSeq, 
                                   nodeDB.getActiveNodesCount(), isTargetValid, currentTargetId, 
                                   targetDist, targetAzimuth, targetQuality, 
-                                  currentBleStatus); 
+                                  currentBleStatus);
      } 
  }

@@ -1,10 +1,10 @@
 /**
  * File: DisplayManager.cpp
- * Version: 1.26 Изменение: Реализация визуализации статуса BLE (символы B/BT/--).
+ * Version: 1.32 Изменение: Перестановка строк на дисплее, вывод MAC-суффикса.
  */
  #include "DisplayManager.h"
 
- DisplayManager::DisplayManager(uint8_t address, int sda, int scl) 
+  DisplayManager::DisplayManager(uint8_t address, int sda, int scl) 
  #if HAS_DISPLAY
      : _display(address, sda, scl) 
  #endif
@@ -45,41 +45,43 @@
  #endif
  }
  
- void DisplayManager::updateMainScreen(bool gpsValid, int sats, uint8_t myNodeId, uint8_t myMsgSeq, 
-                                       uint8_t activeNodes, bool hasTarget, uint8_t targetId, 
-                                       int targetDist, int targetAzimuth, int targetQuality,
-                                       BleStatus bleStatus) {
- #if HAS_DISPLAY
-     String line1, line2, line3, line4;
- 
-     // Сборка Строки 1: GPS + Статус BLE
-     String bleLabel = "";
-     switch(bleStatus) {
-         case BLE_OFF:       bleLabel = " [-]"; break;
-         case BLE_UNPAIRED:  bleLabel = " [?]"; break; // UC-02: Cold Start / Unpaired
-         case BLE_CONNECTED: bleLabel = " [+]"; break;
-     }
- 
-     if (!gpsValid) {
-         line1 = (sats > 0) ? ("GPS Wait " + String(sats)) : "GPS ERR";
-     } else {
-         line1 = "GPS OK " + String(sats);
-     }
-     line1 += bleLabel;
- 
-     line2 = "My: " + String(myNodeId) + "-" + String(myMsgSeq);
-     uint8_t neighbors = (activeNodes > 0) ? (activeNodes - 1) : 0;
-     line3 = "Neighbors: " + String(neighbors);
-     
-     if (hasTarget) {
-         line4 = String(targetId) + ": " + String(targetDist) + "m/" + String(targetAzimuth) + "dg";
-     } else {
-         line4 = "No targets";
-     } 
- 
-     showStatus(line1, line2, line3, line4);
- #endif
- }
+ void DisplayManager::updateMainScreen(const char* macSuffix, bool gpsValid, int sats, uint8_t myNodeId, uint8_t myMsgSeq, 
+    uint8_t activeNodes, bool hasTarget, uint8_t targetId, 
+    int targetDist, int targetAzimuth, int targetQuality,
+    BleStatus bleStatus) {
+#if HAS_DISPLAY
+String line1, line2, line3, line4;
+
+// ИЗМЕНЕНИЕ 1.32: Строка 1 теперь Идентификация (MAC-ID-SEQ)
+line1 = String(macSuffix) + "-" + String(myNodeId) + "-" + String(myMsgSeq);
+
+// ИЗМЕНЕНИЕ 1.32: Строка 2 теперь GPS + Статус BLE
+String bleLabel = "";
+switch(bleStatus) {
+case BLE_OFF:       bleLabel = " [-]"; break;
+case BLE_UNPAIRED:  bleLabel = " [?]"; break; 
+case BLE_CONNECTED: bleLabel = " [+]"; break;
+}
+
+if (!gpsValid) {
+line2 = (sats > 0) ? ("GPS Wait " + String(sats)) : "GPS ERR";
+} else {
+line2 = "GPS OK " + String(sats);
+}
+line2 += bleLabel;
+
+uint8_t neighbors = (activeNodes > 0) ? (activeNodes - 1) : 0;
+line3 = "Neighbors: " + String(neighbors);
+
+if (hasTarget) {
+line4 = String(targetId) + ": " + String(targetDist) + "m/" + String(targetAzimuth) + "dg";
+} else {
+line4 = "No targets";
+} 
+
+showStatus(line1, line2, line3, line4);
+#endif
+}
  
  void DisplayManager::toggleLed() {
  #if HAS_STATUS_LED

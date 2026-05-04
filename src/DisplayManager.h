@@ -1,6 +1,6 @@
 /**
  * File: DisplayManager.h
- * Version: 1.26 Изменение: Добавлена поддержка отображения статуса BLE.
+ * Version: 1.32 Изменение: В updateMainScreen добавлен параметр macSuffix.
  */
  #ifndef DISPLAY_MANAGER_H
  #define DISPLAY_MANAGER_H
@@ -12,7 +12,6 @@
  #include "SSD1306Wire.h"
  #endif
  
- // Состояния BLE для отображения
  enum BleStatus {
      BLE_OFF,
      BLE_UNPAIRED,
@@ -26,8 +25,8 @@
      void showLogo();
      void showStatus(const String& line1, const String& line2, const String& line3, const String& line4);
  
-     // Добавлен параметр bleStatus
-     void updateMainScreen(bool gpsValid, int sats, uint8_t myNodeId, uint8_t myMsgSeq, 
+     // ИЗМЕНЕНИЕ 1.32: Добавлен const char* macSuffix первым аргументом
+     void updateMainScreen(const char* macSuffix, bool gpsValid, int sats, uint8_t myNodeId, uint8_t myMsgSeq, 
                            uint8_t activeNodes, bool hasTarget, uint8_t targetId, 
                            int targetDist, int targetAzimuth, int targetQuality,
                            BleStatus bleStatus);

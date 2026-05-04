@@ -1,14 +1,13 @@
 /**
  * File: BleManager.cpp
- * Version: 1.29 
- * Description: Реализация BLE-менеджера. Интеграция UC-04 (Pairing Sync).
+ * Version: 1.32 
+ * Изменение: Динамическая генерация имени BLE на основе MAC-адреса.
  */
 
  #include "BleManager.h"
  #include "logger.h" 
- 
- // --- Внутренние классы Callbacks ---
- 
+ #include <esp_mac.h> // ИЗМЕНЕНИЕ 1.32: Подключаем библиотеку для чтения MAC
+
  class BleManager::ServerCallbacks : public NimBLEServerCallbacks {
      BleManager* _manager;
  public:
@@ -17,16 +16,15 @@
      void onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) override {
          _manager->_isConnected = true;
          LOG_INFO("BLE", "Smartphone connected!");
-         // NimBLE автоматически останавливает рекламу при подключении
      }
- 
+
      void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) override {
          _manager->_isConnected = false;
          LOG_INFO("BLE", "Smartphone disconnected. Restarting advertising...");
-         NimBLEDevice::startAdvertising(); // Снова становимся видимыми
+         NimBLEDevice::startAdvertising(); 
      }
  };
- 
+
  class BleManager::RxCallbacks : public NimBLECharacteristicCallbacks {
      BleManager* _manager;
  public:
@@ -90,48 +88,53 @@
  
  // --- Основной класс BleManager ---
  
- BleManager::BleManager() : 
+BleManager::BleManager() : 
      pServer(nullptr), pTxCharacteristic(nullptr), pRxCharacteristic(nullptr),
      _isConnected(false), hasNewIdentity(false), hasNewSysConfig(false),
      requestFullSync(false), requestReset(false), requestClearDB(false),
-     requestIdentitySync(false), requestSysConfigSync(false) {} // ИЗМЕНЕНИЕ: Инициализация флагов
+     requestIdentitySync(false), requestSysConfigSync(false) {
+         macSuffix[0] = '\0'; // Инициализируем пустой строкой
+     }
  
-     void BleManager::init() {
-        NimBLEDevice::init("Naviga-Dongle");
-        
-        pServer = NimBLEDevice::createServer();
-        pServer->setCallbacks(new ServerCallbacks(this));
-    
-        NimBLEService* pService = pServer->createService(SERVICE_UUID);
-    
-        // TX Характеристика (Донгл -> Смартфон)
-        pTxCharacteristic = pService->createCharacteristic(
-            CHARACTERISTIC_UUID_TX,
-            NIMBLE_PROPERTY::NOTIFY
-        );
-    
-        // RX Характеристика (Смартфон -> Донгл)
-        pRxCharacteristic = pService->createCharacteristic(
-            CHARACTERISTIC_UUID_RX,
-            NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR
-        );
-        pRxCharacteristic->setCallbacks(new RxCallbacks(this));
-        
-        // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ ДЛЯ NimBLE 2.0.0+:
-        // Запускаем сам GATT-сервер (вместо устаревшего pService->start())
-        pServer->start(); 
-    
-        // Настройка рекламы (Advertising)
-        NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
-        pAdvertising->setName("Naviga-Dongle"); // Явно указываем имя
-        pAdvertising->addServiceUUID(SERVICE_UUID);
-        
-        // В NimBLE 2.0 Scan Response работает автоматически, флаг больше не нужен
-        pAdvertising->start();
-    
-        LOG_INFO("SYS", "BLE Initialized. Advertising started.");
-    }
+ void BleManager::init() {
+     // ИЗМЕНЕНИЕ 1.32: Считываем аппаратный MAC Bluetooth и формируем суффикс
+     uint8_t mac[6];
+     esp_read_mac(mac, ESP_MAC_BT);
+     snprintf(macSuffix, sizeof(macSuffix), "%02X%02X", mac[4], mac[5]);
      
+     // Формируем динамическое имя
+     char devName[20];
+     snprintf(devName, sizeof(devName), "Naviga-%s", macSuffix);
+
+     NimBLEDevice::init(devName);
+     
+     pServer = NimBLEDevice::createServer();
+     pServer->setCallbacks(new ServerCallbacks(this));
+ 
+     NimBLEService* pService = pServer->createService(SERVICE_UUID);
+ 
+     pTxCharacteristic = pService->createCharacteristic(
+         CHARACTERISTIC_UUID_TX,
+         NIMBLE_PROPERTY::NOTIFY
+     );
+ 
+     pRxCharacteristic = pService->createCharacteristic(
+         CHARACTERISTIC_UUID_RX,
+         NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR
+     );
+     pRxCharacteristic->setCallbacks(new RxCallbacks(this));
+     
+     pServer->start(); 
+ 
+     NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
+     pAdvertising->setName(devName); // ИЗМЕНЕНИЕ 1.32: Явно вещаем динамическое имя
+     pAdvertising->addServiceUUID(SERVICE_UUID);
+     
+     pAdvertising->start();
+ 
+     LOG_INFO("SYS", "BLE Initialized. Name: %s", devName);
+ }
+      
  BleStatus BleManager::getBleStatus() {
      if (_isConnected) return BLE_CONNECTED;
      return BLE_UNPAIRED; 
