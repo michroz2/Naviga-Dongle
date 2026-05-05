@@ -103,8 +103,8 @@
  
      // --- GPS (GY-GPS6MV2 / NEO-6M) ---
      // RX контроллера (18) подключен к TX модуля GPS
-     #define GPS_RX      18  
-     #define GPS_TX      17  
+     #define GPS_RX      44 //18  
+     #define GPS_TX      43 //17  
  #endif
  
  // ==========================================================

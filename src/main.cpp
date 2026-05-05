@@ -154,11 +154,15 @@ void scanNetwork(bool isWarmStart) {
             lastDispUpdate = now;
             uint32_t left = (networkScanDuration - (now - scanStart)) / 1000;
             
-            // ИЗМЕНЕНИЕ 1.32: На экране сканирования выводим Start-XXXX
             String startTitle = "Start-" + String(bleManager.macSuffix);
+            
+            // Получаем общее количество узлов и вычитаем себя (Донгл)
+            uint8_t totalNodes = nodeDB.getActiveNodesCount();
+            uint8_t foundNeighbors = (totalNodes > 0) ? (totalNodes - 1) : 0;
+            
             display.showStatus(startTitle, 
                                "Time left: " + String(left) + " s", 
-                               "Nodes Found: " + String(nodeDB.getActiveNodesCount()), 
+                               "Neighbors: " + String(foundNeighbors), 
                                "Please wait...");
         }
 
