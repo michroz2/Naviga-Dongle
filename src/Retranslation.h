@@ -12,13 +12,15 @@
  #include "NavigaProtocol.h"
  
  // --- НАСТРОЙКИ АНТИ-ДУБЛИКАТОРА ---
- const uint16_t HISTORY_SIZE = 300;
+ const uint16_t HISTORY_SIZE = 300; // Хранит последние 300 уникальных пакетов
  
+ // Структура записи в кольцевом буфере анти-дубликатора
  struct PacketRecord {
      uint8_t senderId; 
      uint8_t msgSeq;   
  };
- // НОВОЕ: Forward Declaration (упреждающее объявление)
+
+ // НОВОЕ: Forward Declaration (упреждающее объявление) класса базы узлов
 class NodeDatabase;
 
  class Retranslation {
@@ -33,8 +35,8 @@ class NodeDatabase;
     bool shouldRetransmit(const NavigaHeader& header, const NodeDatabase& nodeDB, uint8_t myNodeType, float mySpeed) const;
 
  private:
-     PacketRecord history[HISTORY_SIZE]; 
-     uint16_t head;                      
+     PacketRecord history[HISTORY_SIZE]; // Кольцевой буфер истории
+     uint16_t head;                      // Указатель на голову кольцевого буфера
  }; 
  
  #endif // RETRANSLATION_H

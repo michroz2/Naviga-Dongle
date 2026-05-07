@@ -1,7 +1,7 @@
 /**
  * File: NodeDatabase.h
  * Version: 1.17 Изменение: Добавлен метод hasNodesInOppositeDirection и массив квадрантов.
- * Description: Заголовочный файл базы данных узлов.
+ * Description: Заголовочный файл локальной базы данных активных узлов.
  */
  #ifndef NODE_DATABASE_H
  #define NODE_DATABASE_H
@@ -11,27 +11,29 @@
  
  #define MAX_NODES 255
 
- // Таймаут неактивности узла: 3 часа (3 * 60 * 60 * 1000 = 10800000 мс)
+ // Старый дефолтный таймаут неактивности узла (заменен на динамический в SettingsManager, но оставлен для резерва)
  #define NODE_TIMEOUT_MS 10800000 
  
+ // Структура хранения информации об одном активном узле
  struct NodeRecord {
      uint8_t nodeId;
-     uint8_t type;       // Тип узла
+     uint8_t type;       // Тип узла (Роль)
      char nodeName[12];  // Соразмерно Payload (с запасом под \0)
      float lat;
      float lon;
-     uint32_t packedCoords;
-     uint32_t lastSeen;
+     uint32_t packedCoords; // Сырые запакованные координаты (до распаковки GeoPacker)
+     uint32_t lastSeen;     // Время (millis()) последнего приема пакета от узла
      bool isActive;
-     float snr;
-     float distance; 
-     float azimuth;  
- }; // struct NodeRecordхзщ98
+     float snr;             // Последний измеренный уровень сигнала от узла
+     float distance;        // Рассчитанная дистанция в метрах до локального устройства
+     float azimuth;         // Рассчитанный азимут (направление) от локального устройства
+ }; // struct NodeRecord
  
  class NodeDatabase {
     public:
         NodeDatabase();
     
+    // Получение указателя на константную запись
     const NodeRecord* getNode(uint8_t nodeId) const;
 
      bool isNodeActive(uint8_t nodeId) const;       
@@ -59,12 +61,12 @@
     void ageAllNodes(uint32_t ageMs);
 
  private:
-     NodeRecord nodes[MAX_NODES];
+     NodeRecord nodes[MAX_NODES]; // Статический массив на 255 узлов
 
      // Кэшированные значения топологии
     uint8_t _activeNodesCount;
     float _cachedMaxDist;
-    uint8_t _quadrantNodes[4]; // 0: 0-90, 1: 90-180, 2: 180-270, 3: 270-360
+    uint8_t _quadrantNodes[4]; // 0: 0-90, 1: 90-180, 2: 180-270, 3: 270-360 градусов
     
  }; // class NodeDatabase
  

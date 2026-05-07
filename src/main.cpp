@@ -10,12 +10,12 @@
  #include <Wire.h>
  #include <SPI.h>              
  #include "configuration.h"
- #include "logger.h"           
+ #include "logger.h"            
  #include "GeoPacker.h"        
  #include "NavigaProtocol.h"
  #include "NodeDatabase.h"     
  #include "Retranslation.h"    
- #include "GpsManager.h"       
+ #include "GpsManager.h"        
  #include "DisplayManager.h"   
  #include "RadioManager.h"     
  #include "PowerManager.h"     
@@ -25,15 +25,16 @@
  #include "SettingsManager.h"  
  
  // --- НАСТРОЙКИ СКАНИРОВАНИЯ ---
- uint32_t networkScanDuration = 30000; 
+ uint32_t networkScanDuration = 30000; // 30 секунд сканирования при включении
  
- uint8_t myNodeId = 0; 
- uint8_t myMsgSeq = 0;
- uint8_t myNodeType = NODE_RELAY; 
+ uint8_t myNodeId = 0;   // Локальный ID устройства в Mesh-сети
+ uint8_t myMsgSeq = 0;   // Счетчик исходящих пакетов (sequence)
+ uint8_t myNodeType = NODE_RELAY; // Роль узла по умолчанию (перезапишется из настроек)
  
- PowerManager power;                                      
+ // Инициализация глобальных менеджеров подсистем
+ PowerManager power;                                       
  DisplayManager display(0x3c, I2C_SDA, I2C_SCL); 
- GpsManager gps;                                       
+ GpsManager gps;                                        
  RadioManager radio; 
  GeoPacker packer;                                      
  NodeDatabase nodeDB;                                   
@@ -42,26 +43,30 @@
  TxManager txManager(radio, packer, myNodeId, myMsgSeq);
  BleManager bleManager;                                 
  
- volatile bool receivedFlag = false;                    
+ volatile bool receivedFlag = false; // Флаг прерывания от модуля LoRa (ISR)                   
  
+ // ISR Коллбэк для обработки прерывания (Packet Received)
  #if defined(ESP8266) || defined(ESP32)
-   ICACHE_RAM_ATTR
+   ICACHE_RAM_ATTR // Помещаем функцию в оперативную память для быстродействия
  #endif
  void setFlag(void) {
      receivedFlag = true;
  } 
  
+ // Системные таймеры
  uint32_t lastTxTime = 0;                               
- uint32_t lastGpsLogTime = 0;                           
- uint32_t lastCleanupTime = 0;                                
- uint32_t lastHeartbeatTime = 0;    
+ uint32_t lastGpsLogTime = 0;                            
+ uint32_t lastCleanupTime = 0;                               
+ uint32_t lastHeartbeatTime = 0;   
  uint32_t lastTopologyUpdateTime = 0;
  
- bool isLonScaleSet = false;                            
+ bool isLonScaleSet = false; // Флаг: был ли рассчитан коэффициент сжатия долготы                           
  
+ // Расчет джиттера (рандомизированной задержки) для умной ретрансляции пакета
  uint32_t calculateRelayJitter(uint8_t myRole, uint8_t senderRole, float snr) {
      uint32_t minMs, maxMs;
      
+     // Определяем базовые окна джиттера в зависимости от нашей роли
      if (myRole == NODE_RELAY) {
          minMs = RELAY_JITTER_MIN_MS;
          maxMs = RELAY_JITTER_MAX_MS;
@@ -70,68 +75,80 @@
          maxMs = STALKER_JITTER_MAX_MS;
      }
  
+     // VIP-Маршрутизация: Если мы ретранслируем пакет ТРЕКЕРА, даем ему зеленый свет
      if (senderRole == NODE_TRACKER) {
-         maxMs /= 2;
+         maxMs /= 2; // Ускоряем в 2 раза
          if (maxMs < minMs) maxMs = minMs; 
      }
  
+     // Мапим задержку на основании качества сигнала (SNR)
+     // Чем лучше сигнал, тем БОЛЬШЕ задержка (передает дальний узел)
      long snrInt = constrain((long)snr, -15, 5);
      uint32_t baseDelay = map(snrInt, -15, 5, minMs, maxMs);
      
-     return baseDelay + random(0, 50);
+     return baseDelay + random(0, 50); // Добавляем небольшую случайность для разрешения коллизий
  }
  
+ // Расчет показателя "качества связи" для вывода на экран (от 1 до 10)
  int getConnectionQuality(uint8_t targetId) {
      if (targetId == myNodeId) return 10; 
  
      const NodeRecord* target = nodeDB.getNode(targetId);
      if (target == nullptr || targetId == 0) return 0;
      
+     // Если от узла давно не было вестей, качество 0
      if (millis() - target->lastSeen > settingsManager.settings.nodeConnectionTimeout) return 0;
      
      if (target->snr <= -99.0f) return 0; 
  
+     // Мапим физический SNR в читаемый балл (1-10)
      int q = map((long)target->snr, -11, 5, 1, 10);
      if (q < 1) q = 1;
      if (q > 10) q = 10;
      return q;
  } 
  
+ // Коллбэк для обновления экрана (используется внутри менеджеров)
  void updateScreenCb(String line1, String line2, String line3, String line4) {
      display.showStatus(line1, line2, line3, line4);
  } 
  
+ // Коллбэк сброса питания GPS
  void cycleGpsPowerCb() {
      power.cycleGpsPower();
  } 
  
+ // Обработка коллизии: если два узла заняли один ID
  void handleCollision() {
     uint8_t oldId = myNodeId;
     nodeDB.removeNode(oldId); 
     
+    // Генерируем новый уникальный ID
     randomSeed(esp_random());
     do {
         myNodeId = random(1, 255);
-    } while (nodeDB.getNode(myNodeId) != nullptr); 
+    } while (nodeDB.getNode(myNodeId) != nullptr); // Проверяем, свободен ли он в базе
     
     nodeDB.addNode(myNodeId); 
     
     LOG_WARN("COLLISION", "ID %d is taken! Switched to new ID: %d", oldId, myNodeId);
     
-    myMsgSeq = 0; 
+    myMsgSeq = 0; // Сбрасываем счетчик пакетов
     
     char myName[12];
     snprintf(myName, sizeof(myName), "Node-%d", myNodeId);
     
+    // Рассылаем новый ID по сети с наивысшим приоритетом
     txManager.sendNodeInfo(myName, myNodeType, TX_CRITICAL);
     nodeDB.updateNodeInfo(myNodeId, myName, myNodeType); 
  
+    // Сохраняем изменения в энергонезависимую память (NVS)
     settingsManager.settings.nodeId = myNodeId;
     settingsManager.save();
     settingsManager.saveNodesSnapshot(nodeDB);
  } 
  
-// ИЗМЕНЕНИЕ 1.28: Универсальная функция сканирования/немого периода
+// Универсальная функция первоначального сканирования и немого периода (Warm/Cold Start)
 void scanNetwork(bool isWarmStart) {
     if (isWarmStart) {
         LOG_INFO("SYS", "Warm Start: Silent listening for %d ms...", networkScanDuration);
@@ -147,9 +164,11 @@ void scanNetwork(bool isWarmStart) {
     receivedFlag = false;
     radio.startReceive(); 
     
+    // Цикл немого прослушивания радиоэфира
     while (millis() - scanStart < networkScanDuration) {
         uint32_t now = millis();
         
+        // Обновляем дисплей каждую секунду
         if (now - lastDispUpdate >= 1000) {
             lastDispUpdate = now;
             uint32_t left = (networkScanDuration - (now - scanStart)) / 1000;
@@ -164,8 +183,9 @@ void scanNetwork(bool isWarmStart) {
                                "Time left: " + String(left) + " s", 
                                "Neighbors: " + String(foundNeighbors), 
                                "Please wait...");
-        }
+        } 
 
+        // Обработка входящих пакетов во время сканирования
         if (receivedFlag) {
             noInterrupts(); receivedFlag = false; interrupts();
             
@@ -188,7 +208,7 @@ void scanNetwork(bool isWarmStart) {
             radio.startReceive();
         } 
         
-        gps.update(); 
+        gps.update(); // Поддерживаем опрос GPS
     } 
     
     display.toggleLed();
@@ -210,6 +230,7 @@ void scanNetwork(bool isWarmStart) {
     delay(2000);
 }
  
+ // === НАЧАЛЬНАЯ НАСТРОЙКА ===
  void setup() {
      delay(500); 
      Serial.begin(115200);
@@ -217,11 +238,13 @@ void scanNetwork(bool isWarmStart) {
      while (!Serial && (millis() - start < 3000)); 
      LOG_INFO("SYS", "--- DONGLE BOOT START ---");
      
+     // Отключаем встроенный LoRa, если это плата T-Beam v1.1
      #ifdef BOARD_T_BEAM_V11
      pinMode(LORA_ONBOARD_CS, OUTPUT);
      digitalWrite(LORA_ONBOARD_CS, HIGH);
      #endif
  
+     // Аппаратный сброс LoRa-модуля
      pinMode(LORA_RST, OUTPUT);
      digitalWrite(LORA_RST, LOW);
      delay(20);  
@@ -238,13 +261,13 @@ void scanNetwork(bool isWarmStart) {
  
      bleManager.init();
      
-     settingsManager.init();
+     settingsManager.init(); // Инициализация энергонезависимой памяти
      myNodeId = settingsManager.settings.nodeId;
      myNodeType = settingsManager.settings.nodeType;
  
-     settingsManager.loadNodesSnapshot(nodeDB);
+     settingsManager.loadNodesSnapshot(nodeDB); // Загружаем "снимки" соседей
  
-     // ИЗМЕНЕНИЕ 1.28: Старим все восстановленные узлы, чтобы они стали "серыми" (timeout + 1 секунда)
+     // ИЗМЕНЕНИЕ 1.28: Искусственно стартим восстановленные узлы, чтобы при Warm Start они были "серыми"
      nodeDB.ageAllNodes(settingsManager.settings.nodeConnectionTimeout + 1000);
  
      // Гарантируем, что наш локальный узел свежий и активный поверх слепка
@@ -255,6 +278,7 @@ void scanNetwork(bool isWarmStart) {
      nodeDB.addNode(myNodeId);
      nodeDB.updateNodeInfo(myNodeId, myName, myNodeType);
  
+     // Если устройство является стационарным ретранслятором, задаем ему статические координаты
      if (myNodeType == NODE_RELAY) {
          gps.setStaticLocation(RELAY_STATIC_LAT, RELAY_STATIC_LON);
      }
@@ -267,25 +291,27 @@ void scanNetwork(bool isWarmStart) {
  
      // ИЗМЕНЕНИЕ 1.28: Вызов универсальной функции сканирования (Cold vs Warm)
      if (myNodeId == 0 || !settingsManager.settings.isConfigured) {
-         scanNetwork(false); // Cold Start
+         scanNetwork(false); // Cold Start - выбор свободного ID
          settingsManager.settings.nodeId = myNodeId;
          settingsManager.settings.isConfigured = true;
          settingsManager.save();
      } else {
-         scanNetwork(true);  // Warm Start (Silent period)
+         scanNetwork(true);  // Warm Start - просто слушаем эфир 30 сек
      }
      
+     // Рассылаем по эфиру свое приветствие
      txManager.sendNodeInfo(myName, myNodeType, TX_NORMAL);
      
      lastTxTime = millis(); 
  } 
  
+ // === ГЛАВНЫЙ ЦИКЛ ОРКЕСТРАТОРА ===
  void loop() {
      uint32_t currentMillis = millis();
      float currentSpeed = gps.getSpeed();
  
-// ==========================================================
-    // ОБРАБОТКА КОМАНД ОТ СМАРТФОНА
+    // ==========================================================
+    // ОБРАБОТКА КОМАНД ОТ СМАРТФОНА ПО BLUETOOTH
     // ==========================================================
     
     // ИЗМЕНЕНИЕ 1.29: Обработка запросов настроек (UC-04 Pairing)
@@ -310,6 +336,7 @@ void scanNetwork(bool isWarmStart) {
         LOG_INFO("BLE", "Sent System Config to Smartphone");
     }
     
+    // Синхронизация всей топологии узлов в смартфон (по запросу)
     if (bleManager.requestFullSync) {
          bleManager.requestFullSync = false;
          for (int i = 1; i < 255; i++) {
@@ -329,12 +356,13 @@ void scanNetwork(bool isWarmStart) {
                  update.lastSeenAge = millis() - node->lastSeen;
                  
                  bleManager.sendNodeUpdate(update);
-                 delay(5); 
+                 delay(5); // Небольшая задержка, чтобы не переполнить MTU стек Bluetooth
              }
          }
          LOG_INFO("BLE", "Full topology sync sent to Smartphone");
      }
  
+     // Получены новые настройки идентификации со смартфона
      if (bleManager.hasNewIdentity) {
          bleManager.hasNewIdentity = false;
          myNodeId = bleManager.newIdentity.myNodeId;
@@ -345,6 +373,7 @@ void scanNetwork(bool isWarmStart) {
          strncpy(settingsManager.settings.nodeName, bleManager.newIdentity.myName, 11);
          settingsManager.save();
  
+         // Уведомляем Mesh-сеть о смене нашего Имени/Роли
          txManager.sendNodeInfo(settingsManager.settings.nodeName, myNodeType, TX_CRITICAL);
          nodeDB.updateNodeInfo(myNodeId, settingsManager.settings.nodeName, myNodeType);
          
@@ -352,6 +381,7 @@ void scanNetwork(bool isWarmStart) {
          LOG_INFO("BLE", "Identity updated from App and saved (ID: %d)", myNodeId);
      }
  
+     // Получены новые системные тайминги со смартфона
      if (bleManager.hasNewSysConfig) {
         bleManager.hasNewSysConfig = false;
         settingsManager.settings.txIntervalMoving = bleManager.newSysConfig.txIntervalMoving;
@@ -365,6 +395,7 @@ void scanNetwork(bool isWarmStart) {
         LOG_INFO("BLE", "SysConfig updated from App and saved");
     }
 
+     // Принудительная очистка базы соседей
      if (bleManager.requestClearDB) {
          bleManager.requestClearDB = false;
          for (int i = 1; i < 255; i++) {
@@ -376,6 +407,7 @@ void scanNetwork(bool isWarmStart) {
          LOG_INFO("BLE", "Node database cleared via App command");
      }
  
+     // Аппаратный сброс (перезагрузка) контроллера
      if (bleManager.requestReset) {
          LOG_INFO("BLE", "Executing Hard Reset via App Command...");
          delay(500);
@@ -383,10 +415,13 @@ void scanNetwork(bool isWarmStart) {
      }
      // ==========================================================
  
+    // Определяем, является ли Трекер "бегущим" (Скорость > порога)
     bool isFastTracker = (myNodeType == NODE_TRACKER && currentSpeed > TRACKER_FAST_SPEED_KMPH);
  
+    // Периодический пересчет топологии сети (Азимуты, Квадранты, Дистанции)
     if (gps.isValid() && (currentMillis - lastTopologyUpdateTime > TOPOLOGY_UPDATE_INTERVAL_MS)) {
         if (isFastTracker) {
+            // Оптимизация процессора: Бегущий трекер не тратит ресурсы на топологию
             LOG_INFO("SYS", "Topology sync skipped: Tracker is running.");
         } else {
             nodeDB.updateTopology();
@@ -394,11 +429,13 @@ void scanNetwork(bool isWarmStart) {
         lastTopologyUpdateTime = currentMillis;
     }
  
+    // Периодическая очистка устаревших узлов (Garbage Collector)
     if (currentMillis - lastCleanupTime > CLEANUP_INTERVAL_MS) {
         nodeDB.cleanup(myNodeId); 
         lastCleanupTime = currentMillis;
     } 
  
+    // Регулярная отправка "живого" пинга (NodeInfo) - Heartbeat
     if (currentMillis - lastHeartbeatTime > HEARTBEAT_INTERVAL_MS) {
         if (myNodeId != 0) { 
             txManager.sendNodeInfo(settingsManager.settings.nodeName, myNodeType, TX_NORMAL);
@@ -408,10 +445,12 @@ void scanNetwork(bool isWarmStart) {
         lastHeartbeatTime = currentMillis;
     } 
  
+     // Обновляем данные с GPS-чипа
      gps.update();
  
+     // === ОБРАБОТКА ВХОДЯЩИХ ПАКЕТОВ LORA (RX) ===
      if (receivedFlag) {
-         noInterrupts(); receivedFlag = false; interrupts();
+         noInterrupts(); receivedFlag = false; interrupts(); // Сброс ISR флага
          
          size_t len = radio.getPacketLength();
          if (len > 0) {
@@ -421,22 +460,25 @@ void scanNetwork(bool isWarmStart) {
                  
                  float currentSNR = radio.getSNR();
                  
+                 // Если пакет прошел базовую проверку на размер
                  if (len >= sizeof(NavigaHeader)) {
                      NavigaHeader rxHeader;
-                     memcpy(&rxHeader, rxBuffer, sizeof(NavigaHeader));
+                     memcpy(&rxHeader, rxBuffer, sizeof(NavigaHeader)); // Извлекаем заголовок
                      size_t payloadLen = len - sizeof(NavigaHeader);
                      
                      bool isCollision = false;
                      bool isOwnEcho = false;
  
+                     // Проверка на коллизии (конфликт ID)
                      if (rxHeader.relayId == myNodeId) {
-                         isCollision = true;
+                         isCollision = true; // Кто-то ретранслирует под нашим ID
                      } else if (rxHeader.senderId == myNodeId) {
+                         // Кто-то отправляет оригинальный пакет с нашим ID. Нужно проверить, не наше ли это эхо.
                          int8_t seqDiff = (int8_t)(myMsgSeq - rxHeader.msgSeq);
                          if (seqDiff <= 0 || seqDiff > 10) {
-                             isCollision = true;
+                             isCollision = true; // Коллизия!
                          } else {
-                             isOwnEcho = true;
+                             isOwnEcho = true;   // Наше собственное эхо, перехваченное от ретранслятора
                          } 
                      } 
  
@@ -444,26 +486,34 @@ void scanNetwork(bool isWarmStart) {
                          handleCollision();
                      } 
  
+                     // Обновляем показатель SNR для узла, который физически передал нам пакет (relayId)
                      if (rxHeader.relayId != myNodeId) {
                          nodeDB.updateNodeSNR(rxHeader.relayId, currentSNR);
                      } 
  
                      if (isOwnEcho) {
+                         // Эхо игнорируем
                      } else if (!router.isValidPacket(rxHeader.getType(), payloadLen)) {
                          LOG_WARN("LORA", "Invalid packet format/size! Type: %d, Len: %d", rxHeader.getType(), payloadLen);
                      } else if (router.isDuplicate(rxHeader.senderId, rxHeader.msgSeq)) {
-                         
+                         // --- IMPLICIT ACK (Подавление перехватом) ---
+                         // Если мы услышали пакет, который уже знаем (дубликат), 
+                         // мы проверяем векторный фильтр. Если мы тупик, мы отменяем свою задачу ретрансляции
                          if (!nodeDB.hasNodesInOppositeDirection(rxHeader.relayId)) {
                              txManager.abortRelay(rxHeader.senderId, rxHeader.msgSeq);
                          } 
                          
                      } else {
+                         // --- ПАКЕТ УСПЕШНО ПРОШЕЛ ВСЕ ФИЛЬТРЫ ---
                          LOG_INFO("LORA", "Valid pkt Type %d from Node %d (Relay: %d, Seq: %d, SNR: %.1f)", 
                                   rxHeader.getType(), rxHeader.senderId, rxHeader.relayId, rxHeader.msgSeq, currentSNR);
                          
+                            // Флаг для определения, впервые ли мы слышим этот узел
                             bool isNewNode = !nodeDB.isNodeActive(rxHeader.senderId);
+                            // Распаковка payload в зависимости от типа
                             packetManager.processPacket(rxHeader, rxBuffer + sizeof(NavigaHeader));
  
+                            // Уведомление смартфона о новых данных узла по BLE
                             const NodeRecord* updatedNode = nodeDB.getNode(rxHeader.senderId);
                             if (updatedNode != nullptr) {
                                 BleEvtNodeUpdate update;
@@ -482,15 +532,20 @@ void scanNetwork(bool isWarmStart) {
                                 bleManager.sendNodeUpdate(update);
                             }
  
+                            // Вежливость: Если это новый узел, планируем ответное приветствие (NodeInfo),
+                            // чтобы он узнал о нашем существовании
                             if (isNewNode && rxHeader.senderId != myNodeId) {
                                 uint32_t currentMillis = millis();
                                 uint32_t jitterMs = random(MIN_GREETING_NODEINFO_JITTER, MAX_GREETING_NODEINFO_JITTER); 
                                 lastHeartbeatTime = currentMillis - HEARTBEAT_INTERVAL_MS + jitterMs;
                                 LOG_INFO("SYS", "New Node %d discovered! NodeInfo reply scheduled", rxHeader.senderId);
                                 
+                                // Сохраняем обновленную базу в NVS
                                 settingsManager.saveNodesSnapshot(nodeDB);
                             } 
  
+                         // --- ПРИНЯТИЕ РЕШЕНИЯ О РЕТРАНСЛЯЦИИ ---
+                         // Вызываем методы "Таможни" (Retranslation)
                          if (router.shouldRetransmit(rxHeader, nodeDB, myNodeType, currentSpeed)) {
                              uint8_t senderRole = NODE_STALKER; 
                              const NodeRecord* senderNode = nodeDB.getNode(rxHeader.senderId);
@@ -498,6 +553,7 @@ void scanNetwork(bool isWarmStart) {
                                  senderRole = senderNode->type;
                              }
                              
+                             // Вычисляем Adaptive Jitter и ставим в очередь TxManager
                              uint32_t calculatedJitter = calculateRelayJitter(myNodeType, senderRole, currentSNR);
                              txManager.enqueueRelay(rxHeader, rxBuffer + sizeof(NavigaHeader), payloadLen, calculatedJitter);
                          } 
@@ -505,52 +561,63 @@ void scanNetwork(bool isWarmStart) {
                  } 
              } 
          } 
-         radio.startReceive();
+         radio.startReceive(); // Возвращаем радио в режим приема
      } 
  
+    // === АДАПТИВНАЯ ОТПРАВКА КООРДИНАТ (SMART TX) ===
     if (gps.isValid()) {
         bool shouldTransmit = false;
         const NodeRecord* myRecord = nodeDB.getNode(myNodeId);
         
+        // Вычисляем смещение относительно нашей последней переданной позиции
         float distFromLastTx = (myRecord != nullptr) ? myRecord->distance : 0.0f;
         uint32_t now = millis();
  
+        // Логика "В движении" (Дистанция > порога И Скорость > порога)
         if (distFromLastTx > MIN_MOVEMENT_METERS && currentSpeed > MIN_SPEED_KMPH) {
             shouldTransmit = true;
+        // Логика "Крадущийся" (Безусловная отправка при сильном смещении без учета скорости)
         } else if (distFromLastTx > SNEAK_MOVEMENT_METERS) {
             shouldTransmit = true;
         } 
  
+        // Проверка таймеров отправки
         if (shouldTransmit && (now - lastTxTime >= settingsManager.settings.txIntervalMoving)) {
             txManager.sendCoords(gps.getLat(), gps.getLon(), TX_HIGH);
             nodeDB.updateNodeCoords(myNodeId, gps.getLat(), gps.getLon(), 0); 
             LOG_INFO("ACTION", "Adaptive TX (Moving): Dist: %.1fm", distFromLastTx);
             lastTxTime = now;
         } else if (now - lastTxTime >= settingsManager.settings.txIntervalStill) {
+            // Если стоим на месте, отправляем Heartbeat-координаты по длинному таймеру
             txManager.sendCoords(gps.getLat(), gps.getLon(), TX_HIGH);
             nodeDB.updateNodeCoords(myNodeId, gps.getLat(), gps.getLon(), 0);
             LOG_INFO("ACTION", "Adaptive TX (Still Heartbeat)");
             lastTxTime = now;
         } 
     } else {
+        // Заглушка, если нет GPS
         if (millis() - lastTxTime >= settingsManager.settings.txIntervalStill) {
             LOG_WARN("TX", "Skip TX: GPS location not valid.");
             lastTxTime = millis(); 
         } 
     } 
  
+     // Обработка очереди на передачу в радиоэфир (Освобождение CSMA/CA)
      txManager.processQueue();
  
+     // === ОБНОВЛЕНИЕ ЭКРАНА И ФОНОВЫХ РАСЧЕТОВ (Раз в секунду) ===
      if (millis() - lastGpsLogTime >= gpsUpdateInterval) { 
          lastGpsLogTime = millis();
          
-         display.toggleLed(); 
+         display.toggleLed(); // Мигаем светодиодом жизни
          
          int sats = gps.getSatellites();
  
+         // Получение последней цели
          uint8_t currentTargetId = packetManager.getLastTargetId();
          const NodeRecord* targetNode = nodeDB.getNode(currentTargetId);
          
+         // Проверка валидности захваченной цели
          bool isTargetValid = (targetNode != nullptr && targetNode->isActive);
  
          if (!isTargetValid && currentTargetId != 0) {
@@ -558,9 +625,10 @@ void scanNetwork(bool isWarmStart) {
              currentTargetId = 0;
          } 
  
+         // Распаковка упакованных координат
          if (gps.isValid()) {
              if (!isLonScaleSet) {
-                 packer.updateLonScale(gps.getLat());
+                 packer.updateLonScale(gps.getLat()); // Устанавливаем масштаб по широте
                  isLonScaleSet = true;
              } 
  
@@ -569,12 +637,14 @@ void scanNetwork(bool isWarmStart) {
                      const NodeRecord* node = nodeDB.getNode(i);
                      if (node != nullptr && node->isActive) {
                          
+                         // Если у нас есть сырые запакованные координаты, но нет распакованных float
                          if (node->packedCoords != 0 && node->lat == 0.0f && node->lon == 0.0f) {
                              float unpLat, unpLon;
                              packer.unpack(node->packedCoords, gps.getLat(), gps.getLon(), unpLat, unpLon);
                              nodeDB.updateNodeCoords(i, unpLat, unpLon, node->packedCoords, false);
                          } 
                          
+                         // Пересчет дистанции и азимута
                          if (node->lat != 0.0f || node->lon != 0.0f) {
                              float d = gps.distanceTo(node->lat, node->lon);
                              float a = gps.courseTo(node->lat, node->lon);
@@ -585,6 +655,7 @@ void scanNetwork(bool isWarmStart) {
              } 
          } 
  
+         // Формирование данных для строки цели на дисплее
          int targetDist = isTargetValid ? (int)targetNode->distance : 0;
          int targetAzimuth = isTargetValid ? (int)targetNode->azimuth : 0;
          int targetQuality = isTargetValid ? getConnectionQuality(targetNode->nodeId) : 0;
@@ -597,4 +668,4 @@ void scanNetwork(bool isWarmStart) {
                                   targetDist, targetAzimuth, targetQuality, 
                                   currentBleStatus);
      } 
- }
+ } //MAIN.CPP

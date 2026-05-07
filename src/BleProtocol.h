@@ -2,6 +2,7 @@
  * File: BleProtocol.h
  * Version: 1.29
  * Description: Описание структур данных для BLE GATT с разделением Identity и Config (UC-04 Pairing).
+ * Все структуры упакованы без выравнивания (pack 1) для обеспечения кроссплатформенности.
  */
 
  #ifndef BLE_PROTOCOL_H
@@ -9,28 +10,28 @@
  
  #include <stdint.h>
  
- #pragma pack(push, 1)
+ #pragma pack(push, 1) // Отключение выравнивания памяти
  
  // ==========================================================
- // 1. КОДЫ ОПЕРАЦИЙ (OpCodes)
+ // 1. КОДЫ ОПЕРАЦИЙ (OpCodes) - Первый байт каждого пакета
  // ==========================================================
  enum BleOpCode : uint8_t {
      // Оператор -> Донгл (Запись/Команды)
      CMD_SET_IDENTITY    = 0x01, // Задать новые Имя и Роль
      CMD_SET_SYS_CONFIG  = 0x02, // Задать системные тайминги и настройки
-     CMD_ACTION_RESET    = 0x03, // Hard Reset
-     CMD_ACTION_CLEAR_DB = 0x04, // Очистить базу узлов
+     CMD_ACTION_RESET    = 0x03, // Hard Reset (Перезагрузка микроконтроллера)
+     CMD_ACTION_CLEAR_DB = 0x04, // Очистить базу соседей (Топологию)
      
-     // Запросы от Оператора к Донглу (при подключении)
-     CMD_REQ_FULL_SYNC   = 0x05, // Запросить базу соседей
+     // Запросы от Оператора к Донглу (при подключении или синхронизации)
+     CMD_REQ_FULL_SYNC   = 0x05, // Запросить всю базу соседей целиком
      CMD_REQ_IDENTITY    = 0x06, // Запросить текущие Имя и Роль Донгла
      CMD_REQ_SYS_CONFIG  = 0x07, // Запросить текущие настройки Донгла
  
      // Донгл -> Оператор (Уведомления)
      EVT_MY_STATUS       = 0x10, // Телеметрия (GPS, Батарея)
-     EVT_NODE_UPDATE     = 0x11, // Обновление по соседу
-     EVT_IDENTITY        = 0x12, // Ответ: Мои текущие Имя и Роль
-     EVT_SYS_CONFIG      = 0x13  // Ответ: Мои текущие настройки
+     EVT_NODE_UPDATE     = 0x11, // Обновление гео-данных по одному соседу
+     EVT_IDENTITY        = 0x12, // Ответ на запрос: Мои текущие Имя и Роль
+     EVT_SYS_CONFIG      = 0x13  // Ответ на запрос: Мои текущие настройки
  };
  
  // ==========================================================
@@ -40,8 +41,8 @@
  // Пакет от Оператора (CMD_SET_IDENTITY) или ответ от Донгла (EVT_IDENTITY)
  struct BleIdentity {
      uint8_t opCode;             // CMD_SET_IDENTITY или EVT_IDENTITY
-     uint8_t myNodeId;           // ID узла (изменяет Донгл при коллизиях)
-     char myName[12];            // Имя узла
+     uint8_t myNodeId;           // ID узла (изменяет Донгл при коллизиях, оператор обычно не трогает)
+     char myName[12];            // Имя узла (Строка с завершающим нулем)
      uint8_t myRole;             // 0-Relay, 1-Stalker, 2-Tracker
  };
  
@@ -51,40 +52,42 @@
  
  // Пакет от Оператора (CMD_SET_SYS_CONFIG) или ответ от Донгла (EVT_SYS_CONFIG)
  struct BleSysConfig {
-     uint8_t opCode;             // CMD_SET_SYS_CONFIG или EVT_SYS_CONFIG
-     uint32_t txIntervalMoving;  // Интервал TX в движении (мс)
-     uint32_t txIntervalStill;   // Интервал TX на стоянке (мс)
+     uint8_t opCode;                 // CMD_SET_SYS_CONFIG или EVT_SYS_CONFIG
+     uint32_t txIntervalMoving;      // Интервал отправки координат в движении (мс)
+     uint32_t txIntervalStill;       // Интервал отправки Heartbeat на стоянке (мс)
      
      // ИЗМЕНЕНИЕ 1.29: Добавлены таймауты
-     uint32_t nodeConnectionTimeout; // Таймаут потери связи (мс)
-     uint32_t nodeActiveTimeoutMs;   // Таймаут очистки из базы (мс)
+     uint32_t nodeConnectionTimeout; // Таймаут потери связи (мс) - влияет на UI (серое отображение)
+     uint32_t nodeActiveTimeoutMs;   // Таймаут очистки из базы (мс) - физическое удаление сборщиком мусора
  };
  
  // ==========================================================
  // 4. ТЕЛЕМЕТРИЯ И ТОПОЛОГИЯ (Без изменений)
  // ==========================================================
  
+ // Периодическая рассылка телеметрии самого донгла
  struct BleEvtMyStatus {
      uint8_t opCode;             // EVT_MY_STATUS (0x10)
-     uint8_t gpsValid;           
-     uint8_t satellites;         
-     uint8_t batteryPercent;     
-     uint8_t txQueueSize;        
+     uint8_t gpsValid;           // 1 - Фикс есть, 0 - нет
+     uint8_t satellites;         // Количество видимых спутников
+     uint8_t batteryPercent;     // Задел на будущее
+     uint8_t txQueueSize;        // Занятость очереди на отправку
  };
  
+ // Обновление информации о конкретном соседе (отправляется по запросу или при приеме пакета из эфира)
  struct BleEvtNodeUpdate {
      uint8_t opCode;             // EVT_NODE_UPDATE (0x11)
-     uint8_t nodeId;             
-     uint8_t nodeRole;           
-     char nodeName[12];          
-     float lat;                  
-     float lon;                  
-     float distance;             
-     float azimuth;              
-     float snr;                  
-     uint32_t lastSeenAge;       
+     uint8_t nodeId;             // Идентификатор соседа
+     uint8_t nodeRole;           // Роль соседа
+     char nodeName[12];          // Имя соседа
+     float lat;                  // Широта
+     float lon;                  // Долгота
+     float distance;             // Дистанция (метры)
+     float azimuth;              // Азимут
+     float snr;                  // Качество сигнала (SNR)
+     uint32_t lastSeenAge;       // Сколько миллисекунд назад узел был на связи (Возраст)
  };
  
- #pragma pack(pop)
+ #pragma pack(pop) // Возвращаем выравнивание памяти по умолчанию
  
  #endif // BLE_PROTOCOL_H

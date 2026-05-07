@@ -1,13 +1,15 @@
 /**
  * File: BleManager.cpp
  * Version: 1.32 
- * Изменение: Динамическая генерация имени BLE на основе MAC-адреса.
+ * Изменение: Динамическая генерация имени BLE на основе аппаратного MAC-адреса чипа.
+ * Description: Реализация менеджера Bluetooth.
  */
 
  #include "BleManager.h"
  #include "logger.h" 
- #include <esp_mac.h> // ИЗМЕНЕНИЕ 1.32: Подключаем библиотеку для чтения MAC
+ #include <esp_mac.h> // ИЗМЕНЕНИЕ 1.32: Подключаем библиотеку для чтения аппаратного MAC
 
+ // Обработчики событий подключения/отключения смартфона
  class BleManager::ServerCallbacks : public NimBLEServerCallbacks {
      BleManager* _manager;
  public:
@@ -16,25 +18,31 @@
      void onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) override {
          _manager->_isConnected = true;
          LOG_INFO("BLE", "Smartphone connected!");
+         // При подключении NimBLE автоматически останавливает Advertising.
+         // Это делает Донгл эксклюзивным и невидимым для других сканеров.
      }
 
      void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) override {
          _manager->_isConnected = false;
          LOG_INFO("BLE", "Smartphone disconnected. Restarting advertising...");
+         // При отключении перезапускаем Advertising, чтобы снова стать видимыми
          NimBLEDevice::startAdvertising(); 
      }
  };
 
+ // Обработчики получения данных со смартфона (Свойство WRITE)
  class BleManager::RxCallbacks : public NimBLECharacteristicCallbacks {
      BleManager* _manager;
  public:
      RxCallbacks(BleManager* manager) : _manager(manager) {}
  
      void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) override {
+         // Получаем бинарные данные от приложения Оператора
          std::string rxValue = pCharacteristic->getValue();
          if (rxValue.length() > 0) {
              uint8_t opCode = rxValue[0]; // Читаем первый байт (Код операции)
  
+             // В зависимости от кода операции, копируем данные в буферы и поднимаем флаги
              switch (opCode) {
                  case CMD_SET_IDENTITY:
                      if (rxValue.length() == sizeof(BleIdentity)) {
@@ -57,7 +65,7 @@
                      LOG_INFO("BLE_RX", "Smartphone requested FULL SYNC (Topology)");
                      break;
                      
-                 // ИЗМЕНЕНИЕ 1.29: Обработка запросов при первом сопряжении
+                 // ИЗМЕНЕНИЕ 1.29: Обработка запросов при первом сопряжении (Pairing)
                  case CMD_REQ_IDENTITY:
                      _manager->requestIdentitySync = true;
                      LOG_INFO("BLE_RX", "App requested Identity Sync (UC-04)");
@@ -97,12 +105,13 @@ BleManager::BleManager() :
      }
  
  void BleManager::init() {
-     // ИЗМЕНЕНИЕ 1.32: Считываем аппаратный MAC Bluetooth и формируем суффикс
+     // ИЗМЕНЕНИЕ 1.32: Считываем аппаратный MAC Bluetooth (Bluetooth-интерфейса чипа ESP)
+     // Берем 2 последних байта (4 шестнадцатеричных символа) для уникальности
      uint8_t mac[6];
      esp_read_mac(mac, ESP_MAC_BT);
      snprintf(macSuffix, sizeof(macSuffix), "%02X%02X", mac[4], mac[5]);
      
-     // Формируем динамическое имя
+     // Формируем динамическое имя для рекламных пакетов (Например: Naviga-7A3E)
      char devName[20];
      snprintf(devName, sizeof(devName), "Naviga-%s", macSuffix);
 
@@ -111,13 +120,16 @@ BleManager::BleManager() :
      pServer = NimBLEDevice::createServer();
      pServer->setCallbacks(new ServerCallbacks(this));
  
+     // Создаем сервис по UUID
      NimBLEService* pService = pServer->createService(SERVICE_UUID);
  
+     // Создаем характеристику TX для уведомлений телефона (NOTIFY)
      pTxCharacteristic = pService->createCharacteristic(
          CHARACTERISTIC_UUID_TX,
          NIMBLE_PROPERTY::NOTIFY
      );
  
+     // Создаем характеристику RX для записи со смартфона (WRITE)
      pRxCharacteristic = pService->createCharacteristic(
          CHARACTERISTIC_UUID_RX,
          NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR
@@ -126,6 +138,7 @@ BleManager::BleManager() :
      
      pServer->start(); 
  
+     // Настраиваем Advertising (видимость в радиоэфире)
      NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
      pAdvertising->setName(devName); // ИЗМЕНЕНИЕ 1.32: Явно вещаем динамическое имя
      pAdvertising->addServiceUUID(SERVICE_UUID);
@@ -134,16 +147,18 @@ BleManager::BleManager() :
  
      LOG_INFO("SYS", "BLE Initialized. Name: %s", devName);
  }
-      
+     
  BleStatus BleManager::getBleStatus() {
      if (_isConnected) return BLE_CONNECTED;
      return BLE_UNPAIRED; 
  }
  
  void BleManager::process() {
-     // Вся логика теперь безопасно выполняется в main.cpp
+     // Вся логика выполнения команд теперь безопасно выполняется в loop() в main.cpp,
+     // чтобы избежать проблем с многозадачностью и прерываниями внутри коллбэков.
  }
  
+ // Упаковка и отправка структуры BleIdentity через характеристику TX
  void BleManager::sendIdentity(uint8_t nodeId, const char* name, uint8_t role) {
      if (!_isConnected) return;
      
@@ -155,10 +170,10 @@ BleManager::BleManager() :
      packet.myName[sizeof(packet.myName) - 1] = '\0'; 
  
      pTxCharacteristic->setValue((uint8_t*)&packet, sizeof(BleIdentity));
-     pTxCharacteristic->notify();
+     pTxCharacteristic->notify(); // Отправка уведомления на смартфон
  }
  
- // ИЗМЕНЕНИЕ 1.29: Обновленная сигнатура
+ // ИЗМЕНЕНИЕ 1.29: Обновленная сигнатура (Добавлены таймауты)
  void BleManager::sendSysConfig(uint32_t txMoving, uint32_t txStill, uint32_t connTimeout, uint32_t activeTimeout) {
      if (!_isConnected) return;
  
@@ -173,8 +188,11 @@ BleManager::BleManager() :
      pTxCharacteristic->notify();
  }
  
+ // Отправка данных об одном узле. При полном синхроне вызывается множество раз подряд в цикле.
  void BleManager::sendNodeUpdate(const BleEvtNodeUpdate& nodeData) {
      if (!_isConnected) return;
      pTxCharacteristic->setValue((uint8_t*)&nodeData, sizeof(BleEvtNodeUpdate));
      pTxCharacteristic->notify();
- }
+ } 
+ 
+ //BleManager.cpp

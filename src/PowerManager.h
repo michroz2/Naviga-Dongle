@@ -10,7 +10,7 @@
  #include <Wire.h>
  #include "configuration.h"
  
- // Подключаем библиотеку PMU только если чип аппаратно присутствует
+ // Подключаем библиотеку PMU только если чип аппаратно присутствует (T-Beam)
  #if HAS_PMU
  #include <XPowersLib.h>
  #endif
@@ -30,7 +30,7 @@
  
  private:
  #if HAS_PMU
-     XPowersAXP2101 _pmu;
+     XPowersAXP2101 _pmu; // Экземпляр драйвера питания
  #endif
  };
  

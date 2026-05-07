@@ -1,7 +1,7 @@
 /**
  * File: TxManager.h
  * Version: 1.19 Изменение: Удален rxSnr, enqueueRelay теперь принимает готовый delayMs (Шаг 2).
- * Description: Единый конвейер для отправки пакетов с поддержкой типа узла.
+ * Description: Единый конвейер (Очередь CSMA/CA) для отправки пакетов с поддержкой типа узла.
  */
  #ifndef TX_MANAGER_H
  #define TX_MANAGER_H
@@ -11,43 +11,50 @@
  #include "RadioManager.h"
  #include "GeoPacker.h"
  
+ // Приоритеты для очереди передачи
  enum TxPriority {
-     TX_CRITICAL = 0, 
-     TX_HIGH = 1,     
-     TX_NORMAL = 2,   
-     TX_RELAY = 3     
+     TX_CRITICAL = 0, // Немедленная смена ID при коллизии
+     TX_HIGH = 1,     // Отправка собственных координат в движении
+     TX_NORMAL = 2,   // Сервисные сообщения (Heartbeat NodeInfo)
+     TX_RELAY = 3     // Ретрансляция чужих сообщений (Самый низкий приоритет)
  }; // enum TxPriority
  
- const uint8_t TX_QUEUE_SIZE = 15;
- const uint8_t MAX_PAYLOAD_SIZE = 16; 
+ const uint8_t TX_QUEUE_SIZE = 15;    // Максимальный размер очереди
+ const uint8_t MAX_PAYLOAD_SIZE = 16; // Максимальный размер полезной нагрузки (Payload)
  
+ // Структура одной задачи на отправку
  struct TxJob {
      bool isActive;
      TxPriority priority;
-     uint32_t readyTime; 
+     uint32_t readyTime; // Время (millis()), когда задача готова к отправке (учитывает джиттер)
      NavigaHeader header;
      uint8_t payload[MAX_PAYLOAD_SIZE];
      size_t payloadLen;
-     // Поле rxSnr удалено, так как задержка теперь рассчитывается до помещения в очередь
+     // Поле rxSnr удалено, так как задержка (Jitter) теперь рассчитывается до помещения в очередь
  }; // struct TxJob 
  
  class TxManager {
  public:
      TxManager(RadioManager& radio, GeoPacker& packer, uint8_t& nodeId, uint8_t& msgSeq);
  
+     // Методы добавления в очередь разных типов сообщений
      void sendNodeInfo(const char* nodeName, uint8_t nodeType, TxPriority priority = TX_NORMAL);
      void sendCoords(float lat, float lon, TxPriority priority = TX_HIGH);
      
-     // ИЗМЕНЕНИЕ 1.19: Заменен float snr на uint32_t delayMs
+     // ИЗМЕНЕНИЕ 1.19: Заменен float snr на uint32_t delayMs (готовое окно джиттера)
      bool enqueueRelay(const NavigaHeader& header, const uint8_t* payload, size_t payloadLen, uint32_t delayMs);
+     
+     // Подавление перехватом (Удаление ретрансляции, если в эфире пойман дубль)
      void abortRelay(uint8_t senderId, uint8_t msgSeq);
+     
+     // Главный диспетчер очередей
      void processQueue();
  
  private:
      RadioManager& _radio;
      GeoPacker& _packer;
-     uint8_t& _myNodeId;
-     uint8_t& _myMsgSeq;
+     uint8_t& _myNodeId; // Ссылка на глобальный ID устройства
+     uint8_t& _myMsgSeq; // Ссылка на глобальный счетчик пакетов
  
      TxJob _queue[TX_QUEUE_SIZE];
      
@@ -55,6 +62,7 @@
      uint32_t _jitterStartTime;
      uint32_t _jitterDelay;
  
+     // Внутренний метод постановки в очередь
      bool enqueue(const NavigaHeader& header, const uint8_t* payload, size_t payloadLen, TxPriority priority, uint32_t delayMs = 0);
  }; // class TxManager
  
