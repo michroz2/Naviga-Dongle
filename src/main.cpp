@@ -1,8 +1,8 @@
 /**
  * Project: Naviga-Dongle (T-Beam v1.1 / T-Energy S3 + Custom E22 + GPS)
  * File: main.cpp
- * Version: 1.28 
- * Изменение: Возвращен немой период (Silent Mode) для Warm Start и искусственное старение базы (UC-03).
+ * Version: 1.34 
+ * Изменение: Интеграция таймера и отправки пакета телеметрии (EVT_MY_STATUS) по Bluetooth.
  * Description: Главный файл оркестратора.
  */
 
@@ -36,9 +36,9 @@
  DisplayManager display(0x3c, I2C_SDA, I2C_SCL); 
  GpsManager gps;                                        
  RadioManager radio; 
- GeoPacker packer;                                      
+ GeoPacker packer;                                       
  NodeDatabase nodeDB;                                   
- Retranslation router;                                  
+ Retranslation router;                                   
  PacketManager packetManager(nodeDB, gps, packer);
  TxManager txManager(radio, packer, myNodeId, myMsgSeq);
  BleManager bleManager;                                 
@@ -59,8 +59,9 @@
  uint32_t lastCleanupTime = 0;                               
  uint32_t lastHeartbeatTime = 0;   
  uint32_t lastTopologyUpdateTime = 0;
+ uint32_t lastTelemetryTime = 0; // ИЗМЕНЕНИЕ 1.34: Таймер для телеметрии
  
- bool isLonScaleSet = false; // Флаг: был ли рассчитан коэффициент сжатия долготы                           
+ bool isLonScaleSet = false; // Флаг: был ли рассчитан коэффициент сжатия долготы                            
  
  // Расчет джиттера (рандомизированной задержки) для умной ретрансляции пакета
  uint32_t calculateRelayJitter(uint8_t myRole, uint8_t senderRole, float snr) {
@@ -267,7 +268,7 @@ void scanNetwork(bool isWarmStart) {
  
      settingsManager.loadNodesSnapshot(nodeDB); // Загружаем "снимки" соседей
  
-     // ИЗМЕНЕНИЕ 1.28: Искусственно стартим восстановленные узлы, чтобы при Warm Start они были "серыми"
+     // Искусственно стартим восстановленные узлы, чтобы при Warm Start они были "серыми"
      nodeDB.ageAllNodes(settingsManager.settings.nodeConnectionTimeout + 1000);
  
      // Гарантируем, что наш локальный узел свежий и активный поверх слепка
@@ -289,7 +290,6 @@ void scanNetwork(bool isWarmStart) {
          delay(3000);
      } 
  
-     // ИЗМЕНЕНИЕ 1.28: Вызов универсальной функции сканирования (Cold vs Warm)
      if (myNodeId == 0 || !settingsManager.settings.isConfigured) {
          scanNetwork(false); // Cold Start - выбор свободного ID
          settingsManager.settings.nodeId = myNodeId;
@@ -314,7 +314,7 @@ void scanNetwork(bool isWarmStart) {
     // ОБРАБОТКА КОМАНД ОТ СМАРТФОНА ПО BLUETOOTH
     // ==========================================================
     
-    // ИЗМЕНЕНИЕ 1.29: Обработка запросов настроек (UC-04 Pairing)
+    // Обработка запросов настроек (UC-04 Pairing)
     if (bleManager.requestIdentitySync) {
         bleManager.requestIdentitySync = false;
         bleManager.sendIdentity(
@@ -387,7 +387,6 @@ void scanNetwork(bool isWarmStart) {
         settingsManager.settings.txIntervalMoving = bleManager.newSysConfig.txIntervalMoving;
         settingsManager.settings.txIntervalStill = bleManager.newSysConfig.txIntervalStill;
         
-        // ИЗМЕНЕНИЕ 1.29: Сохраняем новые таймауты
         settingsManager.settings.nodeConnectionTimeout = bleManager.newSysConfig.nodeConnectionTimeout;
         settingsManager.settings.nodeActiveTimeoutMs = bleManager.newSysConfig.nodeActiveTimeoutMs;
         
@@ -447,6 +446,18 @@ void scanNetwork(bool isWarmStart) {
  
      // Обновляем данные с GPS-чипа
      gps.update();
+
+     // ИЗМЕНЕНИЕ 1.34: Регулярная отправка Телеметрии по Bluetooth
+     if (currentMillis - lastTelemetryTime >= TELEMETRY_INTERVAL_MS) {
+         lastTelemetryTime = currentMillis;
+         if (bleManager.getBleStatus() == BLE_CONNECTED) {
+             uint8_t gpsValid = gps.isValid() ? 1 : 0;
+             uint8_t sats = (uint8_t)gps.getSatellites();
+             uint8_t battPct = power.getBatteryPercent();
+             uint16_t battV = power.getBatteryVoltage();
+             bleManager.sendMyStatus(gpsValid, sats, battPct, battV);
+         }
+     }
  
      // === ОБРАБОТКА ВХОДЯЩИХ ПАКЕТОВ LORA (RX) ===
      if (receivedFlag) {
@@ -662,7 +673,6 @@ void scanNetwork(bool isWarmStart) {
  
          BleStatus currentBleStatus = bleManager.getBleStatus();
  
-// ИЗМЕНЕНИЕ 1.32: Передаем bleManager.macSuffix первым аргументом
          display.updateMainScreen(bleManager.macSuffix, gps.isValid(), sats, myNodeId, myMsgSeq, 
                                   nodeDB.getActiveNodesCount(), isTargetValid, currentTargetId, 
                                   targetDist, targetAzimuth, targetQuality, 

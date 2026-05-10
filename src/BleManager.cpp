@@ -1,13 +1,13 @@
 /**
  * File: BleManager.cpp
- * Version: 1.32 
- * Изменение: Динамическая генерация имени BLE на основе аппаратного MAC-адреса чипа.
+ * Version: 1.34 
+ * Изменение: Реализован метод sendMyStatus для отправки пакета телеметрии EVT_MY_STATUS.
  * Description: Реализация менеджера Bluetooth.
  */
 
  #include "BleManager.h"
  #include "logger.h" 
- #include <esp_mac.h> // ИЗМЕНЕНИЕ 1.32: Подключаем библиотеку для чтения аппаратного MAC
+ #include <esp_mac.h> 
 
  // Обработчики событий подключения/отключения смартфона
  class BleManager::ServerCallbacks : public NimBLEServerCallbacks {
@@ -65,7 +65,6 @@
                      LOG_INFO("BLE_RX", "Smartphone requested FULL SYNC (Topology)");
                      break;
                      
-                 // ИЗМЕНЕНИЕ 1.29: Обработка запросов при первом сопряжении (Pairing)
                  case CMD_REQ_IDENTITY:
                      _manager->requestIdentitySync = true;
                      LOG_INFO("BLE_RX", "App requested Identity Sync (UC-04)");
@@ -96,7 +95,7 @@
  
  // --- Основной класс BleManager ---
  
-BleManager::BleManager() : 
+ BleManager::BleManager() : 
      pServer(nullptr), pTxCharacteristic(nullptr), pRxCharacteristic(nullptr),
      _isConnected(false), hasNewIdentity(false), hasNewSysConfig(false),
      requestFullSync(false), requestReset(false), requestClearDB(false),
@@ -105,7 +104,7 @@ BleManager::BleManager() :
      }
  
  void BleManager::init() {
-     // ИЗМЕНЕНИЕ 1.32: Считываем аппаратный MAC Bluetooth (Bluetooth-интерфейса чипа ESP)
+     // Считываем аппаратный MAC Bluetooth (Bluetooth-интерфейса чипа ESP)
      // Берем 2 последних байта (4 шестнадцатеричных символа) для уникальности
      uint8_t mac[6];
      esp_read_mac(mac, ESP_MAC_BT);
@@ -140,7 +139,7 @@ BleManager::BleManager() :
  
      // Настраиваем Advertising (видимость в радиоэфире)
      NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
-     pAdvertising->setName(devName); // ИЗМЕНЕНИЕ 1.32: Явно вещаем динамическое имя
+     pAdvertising->setName(devName); // Явно вещаем динамическое имя
      pAdvertising->addServiceUUID(SERVICE_UUID);
      
      pAdvertising->start();
@@ -173,7 +172,6 @@ BleManager::BleManager() :
      pTxCharacteristic->notify(); // Отправка уведомления на смартфон
  }
  
- // ИЗМЕНЕНИЕ 1.29: Обновленная сигнатура (Добавлены таймауты)
  void BleManager::sendSysConfig(uint32_t txMoving, uint32_t txStill, uint32_t connTimeout, uint32_t activeTimeout) {
      if (!_isConnected) return;
  
@@ -194,5 +192,19 @@ BleManager::BleManager() :
      pTxCharacteristic->setValue((uint8_t*)&nodeData, sizeof(BleEvtNodeUpdate));
      pTxCharacteristic->notify();
  } 
- 
+
+ // ИЗМЕНЕНИЕ 1.34: Упаковка и отправка телеметрии о состоянии Донгла
+ void BleManager::sendMyStatus(uint8_t gpsValid, uint8_t satellites, uint8_t batteryPercent, uint16_t batteryVoltage) {
+     if (!_isConnected) return;
+
+     BleEvtMyStatus packet;
+     packet.opCode = EVT_MY_STATUS;
+     packet.gpsValid = gpsValid;
+     packet.satellites = satellites;
+     packet.batteryPercent = batteryPercent;
+     packet.batteryVoltage = batteryVoltage;
+
+     pTxCharacteristic->setValue((uint8_t*)&packet, sizeof(BleEvtMyStatus));
+     pTxCharacteristic->notify();
+ }
  //BleManager.cpp

@@ -1,6 +1,7 @@
 /**
  * File: PowerManager.cpp
- * Version: 1.21 Изменение: Изоляция вызовов AXP2101 для совместимости с T-Energy S3 (Шаг 3.1).
+ * Version: 1.34 
+ * Изменение: Реализована логика измерения заряда для плат с AXP2101 и прямой расчет по АЦП для T-Energy S3.
  * Description: Реализация класса управления питанием.
  */
  #include "PowerManager.h"
@@ -27,7 +28,7 @@
          // Отключаем неиспользуемые линии для экономии
          _pmu.disableALDO4(); 
          
-         // Включаем АЦП для замера батареи в будущем
+         // Включаем АЦП для замера батареи 
          _pmu.enableSystemVoltageMeasure();  
          return true;
      }
@@ -55,4 +56,31 @@
      // Оставляем только логирование. Встроенный программный Rescue Mode (через UBX_FACTORY_RESET) в GpsManager отработает сам.
      LOG_WARN("PWR", "Cannot cycle GPS power: No PMU hardware.");
  #endif
- } //PowerManager.cpp
+ }
+ 
+ // Получение процента заряда батареи
+ uint8_t PowerManager::getBatteryPercent() {
+ #if HAS_PMU
+     return _pmu.getBatteryPercent();
+ #else
+     // Для плат без PMU (T-Energy S3) вычисляем процент по напряжению.
+     // Полностью заряженный Li-Ion ~ 4.2V (4200 mV), полностью разряженный ~ 3.3V (3300 mV).
+     uint16_t mv = getBatteryVoltage();
+     if (mv >= 4200) return 100;
+     if (mv <= 3300) return 0;
+     return (uint8_t)map(mv, 3300, 4200, 0, 100);
+ #endif
+ }
+ 
+ // Получение напряжения батареи в милливольтах
+ uint16_t PowerManager::getBatteryVoltage() {
+ #if HAS_PMU
+     return _pmu.getBattVoltage(); // Возвращает милливольты через драйвер
+ #else
+     // Для плат T-Energy S3: аппаратный делитель напряжения 1/2 подключен к GPIO 3.
+     // analogReadMilliVolts возвращает напряжение на самом пине. Умножаем на 2.
+     uint32_t adc_mv = analogReadMilliVolts(3);
+     return (uint16_t)(adc_mv * 2);
+ #endif
+ }
+ //PowerManager.cpp

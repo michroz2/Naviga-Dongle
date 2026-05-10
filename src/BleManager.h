@@ -1,6 +1,7 @@
 /**
  * File: BleManager.h
- * Version: 1.32 Изменение: Добавлена переменная macSuffix для хранения суффикса устройства.
+ * Version: 1.34 
+ * Изменение: Добавлен метод sendMyStatus для отправки телеметрии (GPS и батарея).
  * Description: Управление BLE-стеком (через библиотеку NimBLE) и реализация протокола Naviga (UC-04).
  */
 
@@ -25,6 +26,7 @@
      void sendIdentity(uint8_t nodeId, const char* name, uint8_t role);
      void sendSysConfig(uint32_t txMoving, uint32_t txStill, uint32_t connTimeout, uint32_t activeTimeout);
      void sendNodeUpdate(const BleEvtNodeUpdate& nodeData);
+     void sendMyStatus(uint8_t gpsValid, uint8_t satellites, uint8_t batteryPercent, uint16_t batteryVoltage); // ИЗМЕНЕНИЕ 1.34
  
      // --- Флаги и буферы ---
      // Выставление флагов при приеме данных. Обработка флагов осуществляется в main.cpp
@@ -38,7 +40,7 @@
      bool requestIdentitySync;
      bool requestSysConfigSync;
 
-     // ИЗМЕНЕНИЕ 1.32: Храним 4 символа аппаратного MAC-адреса для вывода на экран и в имя
+     // Храним 4 символа аппаратного MAC-адреса для вывода на экран и в имя
      char macSuffix[5]; 
 
  private:
