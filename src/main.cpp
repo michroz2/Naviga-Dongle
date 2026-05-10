@@ -1,8 +1,8 @@
 /**
  * Project: Naviga-Dongle (T-Beam v1.1 / T-Energy S3 + Custom E22 + GPS)
  * File: main.cpp
- * Version: 1.34 
- * Изменение: Интеграция таймера и отправки пакета телеметрии (EVT_MY_STATUS) по Bluetooth.
+ * Version: 1.35 
+ * Изменение: Динамический пересчет коэффициента сжатия долготы при существенном смещении устройства (защита GeoPacker).
  * Description: Главный файл оркестратора.
  */
 
@@ -59,9 +59,10 @@
  uint32_t lastCleanupTime = 0;                               
  uint32_t lastHeartbeatTime = 0;   
  uint32_t lastTopologyUpdateTime = 0;
- uint32_t lastTelemetryTime = 0; // ИЗМЕНЕНИЕ 1.34: Таймер для телеметрии
+ uint32_t lastTelemetryTime = 0; // Таймер для телеметрии
  
- bool isLonScaleSet = false; // Флаг: был ли рассчитан коэффициент сжатия долготы                            
+ bool isLonScaleSet = false; // Флаг: был ли рассчитан коэффициент сжатия долготы
+ float lastScaleLat = 0.0f;  // ИЗМЕНЕНИЕ 1.35: Широта, при которой последний раз был рассчитан масштаб                            
  
  // Расчет джиттера (рандомизированной задержки) для умной ретрансляции пакета
  uint32_t calculateRelayJitter(uint8_t myRole, uint8_t senderRole, float snr) {
@@ -447,7 +448,7 @@ void scanNetwork(bool isWarmStart) {
      // Обновляем данные с GPS-чипа
      gps.update();
 
-     // ИЗМЕНЕНИЕ 1.34: Регулярная отправка Телеметрии по Bluetooth
+     // Регулярная отправка Телеметрии по Bluetooth
      if (currentMillis - lastTelemetryTime >= TELEMETRY_INTERVAL_MS) {
          lastTelemetryTime = currentMillis;
          if (bleManager.getBleStatus() == BLE_CONNECTED) {
@@ -638,9 +639,13 @@ void scanNetwork(bool isWarmStart) {
  
          // Распаковка упакованных координат
          if (gps.isValid()) {
-             if (!isLonScaleSet) {
-                 packer.updateLonScale(gps.getLat()); // Устанавливаем масштаб по широте
+             float currentLat = gps.getLat();
+             // ИЗМЕНЕНИЕ 1.35: Динамический пересчет масштаба при смещении по широте (> 1 градуса)
+             if (!isLonScaleSet || abs(currentLat - lastScaleLat) > 1.0f) {
+                 packer.updateLonScale(currentLat); // Устанавливаем масштаб по широте
+                 lastScaleLat = currentLat;
                  isLonScaleSet = true;
+                 LOG_INFO("SYS", "Longitude scale updated for Lat: %.4f", currentLat);
              } 
  
              if (!isFastTracker) {
