@@ -1,8 +1,8 @@
 /**
  * Project: Naviga-Dongle (T-Beam v1.1 / T-Energy S3 + Custom E22 + GPS)
  * File: main.cpp
- * Version: 1.38 
- * Изменение: Обновлена сигнатура processPacket (Шаг 2).
+ * Version: 1.39 
+ * Изменение: Команда requestReset теперь вызывает очистку флэш-памяти (UC-08 Factory Reset).
  * Description: Главный файл оркестратора.
  */
 
@@ -137,7 +137,7 @@
     
     myMsgSeq = 0; // Сбрасываем счетчик пакетов
     
-    char myName[24]; // ИЗМЕНЕНИЕ 1.38: Буфер расширен до 24 байт
+    char myName[24]; // Буфер расширен до 24 байт
     snprintf(myName, sizeof(myName), "Node-%d", myNodeId);
     
     // Рассылаем новый ID по сети с наивысшим приоритетом
@@ -202,7 +202,6 @@ void scanNetwork(bool isWarmStart) {
                     
                     if (router.isValidPacket(rxHeader.getType(), payloadLen)) {
                         if (!router.isDuplicate(rxHeader.senderId, rxHeader.msgSeq)) {
-                            // ИЗМЕНЕНИЕ 1.38: Передача payloadLen
                             packetManager.processPacket(rxHeader, rxBuffer + sizeof(NavigaHeader), payloadLen);
                         } 
                     } 
@@ -274,7 +273,7 @@ void scanNetwork(bool isWarmStart) {
      nodeDB.ageAllNodes(settingsManager.settings.nodeConnectionTimeout + 1000);
  
      // Гарантируем, что наш локальный узел свежий и активный поверх слепка
-     char myName[24]; // ИЗМЕНЕНИЕ 1.38: Буфер расширен до 24 байт
+     char myName[24]; // Буфер расширен до 24 байт
      strncpy(myName, settingsManager.settings.nodeName, sizeof(myName)-1);
      myName[sizeof(myName)-1] = '\0';
      
@@ -372,7 +371,6 @@ void scanNetwork(bool isWarmStart) {
          
          settingsManager.settings.nodeId = myNodeId;
          settingsManager.settings.nodeType = myNodeType;
-         // ИЗМЕНЕНИЕ 1.38: Безопасное копирование расширенного буфера
          strncpy(settingsManager.settings.nodeName, bleManager.newIdentity.myName, sizeof(settingsManager.settings.nodeName)-1);
          settingsManager.settings.nodeName[sizeof(settingsManager.settings.nodeName)-1] = '\0';
          settingsManager.save();
@@ -410,11 +408,12 @@ void scanNetwork(bool isWarmStart) {
          LOG_INFO("BLE", "Node database cleared via App command");
      }
  
-     // Аппаратный сброс (перезагрузка) контроллера
+     // ИЗМЕНЕНИЕ 1.39: Аппаратный сброс (перезагрузка) с полной очисткой флэш-памяти (Factory Reset)
      if (bleManager.requestReset) {
-         LOG_INFO("BLE", "Executing Hard Reset via App Command...");
+         LOG_INFO("BLE", "Executing FACTORY RESET via App Command...");
+         settingsManager.factoryReset(); // Стираем все данные из NVS (настройки и слепки узлов)
          delay(500);
-         ESP.restart();
+         ESP.restart(); // Перезагружаем контроллер, чтобы начать с Cold Start
      }
      // ==========================================================
  
@@ -526,7 +525,6 @@ void scanNetwork(bool isWarmStart) {
                             // Флаг для определения, впервые ли мы слышим этот узел
                             bool isNewNode = !nodeDB.isNodeActive(rxHeader.senderId);
                             // Распаковка payload в зависимости от типа
-                            // ИЗМЕНЕНИЕ 1.38: Передача payloadLen
                             packetManager.processPacket(rxHeader, rxBuffer + sizeof(NavigaHeader), payloadLen);
  
                             // Уведомление смартфона о новых данных узла по BLE
