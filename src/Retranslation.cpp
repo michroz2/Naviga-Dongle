@@ -1,6 +1,7 @@
 /**
  * File: Retranslation.cpp
- * Version: 1.19 Изменение: Отключение векторного фильтра для роли NODE_RELAY (Шаг 2).
+ * Version: 1.37 
+ * Изменение: Валидация пакетов теперь учитывает переменный размер Payload (min/max).
  * Description: Реализация класса фильтрации эфира ("Таможня эфира").
  */
  #include "Retranslation.h"
@@ -35,7 +36,9 @@
  bool Retranslation::isValidPacket(uint8_t msgType, size_t payloadLen) const {
      if (msgType != MSG_NODE_INFO && msgType != MSG_COORDS && msgType != MSG_LEAVE) return false;
      MessagePolicy policy = getMessagePolicy(msgType);
-     return (payloadLen == policy.expectedSize);
+     
+     // ИЗМЕНЕНИЕ 1.37: Проверка попадания длины полезной нагрузки в разрешенный диапазон
+     return (payloadLen >= policy.minSize && payloadLen <= policy.maxSize);
  } 
   
  // Главный метод: Решение о том, должен ли локальный узел ретранслировать пакет
@@ -88,7 +91,7 @@
  
      // Векторный фильтр (Строгий Географический тупик)
      // Проверяет, есть ли узлы "за спиной" относительно источника пакета
-     // ИЗМЕНЕНИЕ 1.19: Отключение векторного фильтра для роли NODE_RELAY (Магистраль светит во все стороны)
+     // Отключение векторного фильтра для роли NODE_RELAY (Магистраль светит во все стороны)
      if (myNodeType != NODE_RELAY) {
          if (!nodeDB.hasNodesInOppositeDirection(header.relayId)) {
              LOG_INFO("RELAY", "Packet Seq %d dropped: Geographic dead end (No nodes opposite to %d).", header.msgSeq, header.relayId);

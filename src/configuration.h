@@ -1,7 +1,7 @@
 /**
  * File: configuration.h
- * Version: 1.34 
- * Изменение: Добавлена константа TELEMETRY_INTERVAL_MS для отправки данных о батарее и GPS по BLE.
+ * Version: 1.38 
+ * Изменение: Увеличен буфер nodeName до 24 байт в NavigaSettings (Шаг 2).
  * Description: Конфигурация пинов и базовых настроек для разных аппаратных платформ.
  */
  
@@ -129,7 +129,6 @@
  #define MIN_GREETING_NODEINFO_JITTER 120000 // Мин. задержка перед приветствием нового узла (защита от шторма)
  #define MAX_GREETING_NODEINFO_JITTER 300000 // Макс. задержка перед приветствием
  
- // ИЗМЕНЕНИЕ 1.34: Интервал отправки телеметрии (EVT_MY_STATUS) по Bluetooth
  #define TELEMETRY_INTERVAL_MS 10000         // Интервал отправки телеметрии (10 сек)
  
  // --- НАСТРОЙКИ АДАПТИВНОЙ ОТПРАВКИ КООРДИНАТ (v1.18) ---
@@ -169,7 +168,7 @@
  struct NavigaSettings {
      uint8_t nodeId;
      uint8_t nodeType;
-     char nodeName[12];
+     char nodeName[24];              // ИЗМЕНЕНИЕ 1.38: Буфер расширен до 24 байт
      uint32_t txIntervalMoving;
      uint32_t txIntervalStill;
      uint32_t nodeConnectionTimeout; 

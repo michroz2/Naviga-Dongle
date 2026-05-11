@@ -1,8 +1,8 @@
 /**
  * File: BleProtocol.h
- * Version: 1.34
+ * Version: 1.38
  * Description: Описание структур данных для BLE GATT. 
- * Изменение: Удален txQueueSize из BleEvtMyStatus, добавлено batteryVoltage.
+ * Изменение: Поля имен увеличены до 24 байт для поддержки кириллицы (Шаг 2).
  * Все структуры упакованы без выравнивания (pack 1) для обеспечения кроссплатформенности.
  */
 
@@ -43,7 +43,7 @@
  struct BleIdentity {
      uint8_t opCode;             // CMD_SET_IDENTITY или EVT_IDENTITY
      uint8_t myNodeId;           // ID узла (изменяет Донгл при коллизиях, оператор обычно не трогает)
-     char myName[12];            // Имя узла (Строка с завершающим нулем)
+     char myName[24];            // ИЗМЕНЕНИЕ 1.38: Имя узла (24 байта)
      uint8_t myRole;             // 0-Relay, 1-Stalker, 2-Tracker
  };
  
@@ -64,7 +64,7 @@
  // 4. ТЕЛЕМЕТРИЯ И ТОПОЛОГИЯ 
  // ==========================================================
  
- // Периодическая рассылка телеметрии самого донгла (ИЗМЕНЕНИЕ 1.34)
+ // Периодическая рассылка телеметрии самого донгла
  struct BleEvtMyStatus {
      uint8_t opCode;             // EVT_MY_STATUS (0x10)
      uint8_t gpsValid;           // 1 - Фикс есть, 0 - нет
@@ -78,7 +78,7 @@
      uint8_t opCode;             // EVT_NODE_UPDATE (0x11)
      uint8_t nodeId;             // Идентификатор соседа
      uint8_t nodeRole;           // Роль соседа
-     char nodeName[12];          // Имя соседа
+     char nodeName[24];          // ИЗМЕНЕНИЕ 1.38: Имя соседа (24 байта)
      float lat;                  // Широта
      float lon;                  // Долгота
      float distance;             // Дистанция (метры)

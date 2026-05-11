@@ -1,6 +1,7 @@
 /**
  * File: PacketManager.cpp
- * Version: 1.14 Изменение: Использование связки isNodeActive и addNode вместо getOrCreateNode.
+ * Version: 1.38 
+ * Изменение: Безопасный парсинг переменной длины для пакетов NodeInfo (Шаг 2).
  * Description: Реализация диспетчера пакетов. Распаковывает Payload и обновляет базу данных.
  */
  #include "PacketManager.h"
@@ -44,13 +45,21 @@
      LOG_INFO("DISPATCH", "Extracted COORDS: Node %d -> Lat: %.6f, Lon: %.6f", senderId, unpLat, unpLon);
  } // PacketManager::handleCoordsPacket()
  
- // Обработчик пакета типа MSG_NODE_INFO
- void PacketManager::handleNodeInfoPacket(uint8_t senderId, const uint8_t* payload) {
-     PayloadNodeInfo info;
-     memcpy(&info, payload, sizeof(PayloadNodeInfo));
+ // ИЗМЕНЕНИЕ 1.38: Обработчик пакета типа MSG_NODE_INFO с переменной длиной
+ void PacketManager::handleNodeInfoPacket(uint8_t senderId, const uint8_t* payload, size_t payloadLen) {
+     if (payloadLen < 2) return; // Защита: пакет должен содержать минимум 1 байт роли и 1 байт нуль-терминатора
      
-     _nodeDB.updateNodeInfo(senderId, info.nodeName, info.nodeType);
-     LOG_INFO("DISPATCH", "Updated Node %d: Name=%s, Type=%d", senderId, info.nodeName, info.nodeType);
+     uint8_t nodeType = payload[0];
+     
+     char nodeName[24];
+     size_t nameLen = payloadLen - 1; // Все байты после роли - это имя
+     if (nameLen > 23) nameLen = 23;  // Защита от переполнения (максимум 23 символа)
+     
+     memcpy(nodeName, payload + 1, nameLen);
+     nodeName[nameLen] = '\0'; // Гарантированно закрываем строку
+     
+     _nodeDB.updateNodeInfo(senderId, nodeName, nodeType);
+     LOG_INFO("DISPATCH", "Updated Node %d: Name=%s, Type=%d", senderId, nodeName, nodeType);
  } // PacketManager::handleNodeInfoPacket()
  
  // Обработчик пакета типа MSG_LEAVE
@@ -62,19 +71,19 @@
  } // PacketManager::handleLeavePacket()
  
  // Главный распределитель пакетов
- void PacketManager::processPacket(const NavigaHeader& header, const uint8_t* payload) {
+ void PacketManager::processPacket(const NavigaHeader& header, const uint8_t* payload, size_t payloadLen) {
      // Уверены, что получили валидный пакет. Проверяем и явно добавляем узел в базу, если его там нет.
      if (!_nodeDB.isNodeActive(header.senderId)) {
          _nodeDB.addNode(header.senderId);
      }
-
+ 
      // Маршрутизация по типам пакетов
      switch(header.getType()) {
          case MSG_COORDS:
              handleCoordsPacket(header.senderId, payload);
              break;
          case MSG_NODE_INFO:
-             handleNodeInfoPacket(header.senderId, payload);
+             handleNodeInfoPacket(header.senderId, payload, payloadLen);
              break;
          case MSG_LEAVE:
              handleLeavePacket(header.senderId, payload);

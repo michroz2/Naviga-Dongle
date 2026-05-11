@@ -1,6 +1,7 @@
 /**
  * File: TxManager.cpp
- * Version: 1.19 Изменение: Делегирование расчета джиттера внешнему коду при ретрансляции (Шаг 2).
+ * Version: 1.38 
+ * Изменение: Умная упаковка пакетов NODE_INFO переменной длины (до 24 байт) (Шаг 2).
  * Description: Реализация TxManager (MAC-диспетчер и управление очередями отправки).
  */
  #include "TxManager.h"
@@ -49,13 +50,21 @@
      txHeader.msgSeq = _myMsgSeq++;
      txHeader.setTypeAndTTL(MSG_NODE_INFO, DEFAULT_TTL);
  
-     PayloadNodeInfo infoPayload;
-     infoPayload.nodeType = nodeType; 
-     strncpy(infoPayload.nodeName, nodeName, sizeof(infoPayload.nodeName) - 1);
-     infoPayload.nodeName[sizeof(infoPayload.nodeName) - 1] = '\0';
+     // ИЗМЕНЕНИЕ 1.38: Формируем пакет переменной длины
+     uint8_t payloadBuf[MAX_PAYLOAD_SIZE];
+     payloadBuf[0] = nodeType;
+     
+     size_t nameLen = strlen(nodeName);
+     if (nameLen > MAX_PAYLOAD_SIZE - 2) {
+         nameLen = MAX_PAYLOAD_SIZE - 2; // Оставляем место под байт роли и нуль-терминатор
+     }
+     memcpy(&payloadBuf[1], nodeName, nameLen);
+     payloadBuf[1 + nameLen] = '\0'; // Гарантированный нуль-терминатор
+     
+     size_t actualLen = 1 + nameLen + 1;
  
-     enqueue(txHeader, (const uint8_t*)&infoPayload, sizeof(PayloadNodeInfo), priority, 0);
-     LOG_INFO("TX", "Enqueued NODE_INFO: Name=%s, Type=%d", nodeName, nodeType);
+     enqueue(txHeader, payloadBuf, actualLen, priority, 0);
+     LOG_INFO("TX", "Enqueued NODE_INFO: Name=%s, Type=%d, Len=%d", nodeName, nodeType, actualLen);
  } // TxManager::sendNodeInfo()
  
  // Упаковка и постановка в очередь координат
@@ -72,7 +81,6 @@
  } // TxManager::sendCoords()
  
  // Постановка в очередь чужого пакета (Ретрансляция) с заданным окном задержки (Джиттером)
- // ИЗМЕНЕНИЕ 1.19: Принимаем готовый delayMs вместо snr
  bool TxManager::enqueueRelay(const NavigaHeader& header, const uint8_t* payload, size_t payloadLen, uint32_t delayMs) {
      if (payloadLen > MAX_PAYLOAD_SIZE) return false;
  
@@ -157,7 +165,7 @@
                  case TX_HIGH:     _jitterDelay = random(50, 150); break;
                  case TX_NORMAL:   _jitterDelay = random(100, 300); break;
                  case TX_RELAY: {
-                     // ИЗМЕНЕНИЕ 1.19: Джиттер уже был учтен в readyTime при помещении в очередь.
+                     // Джиттер уже был учтен в readyTime при помещении в очередь.
                      // Ставим 0, чтобы передача сработала немедленно при выборе задачи.
                      _jitterDelay = 0; 
                      break;

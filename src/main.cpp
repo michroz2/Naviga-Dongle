@@ -1,8 +1,8 @@
 /**
  * Project: Naviga-Dongle (T-Beam v1.1 / T-Energy S3 + Custom E22 + GPS)
  * File: main.cpp
- * Version: 1.35 
- * Изменение: Динамический пересчет коэффициента сжатия долготы при существенном смещении устройства (защита GeoPacker).
+ * Version: 1.38 
+ * Изменение: Обновлена сигнатура processPacket (Шаг 2).
  * Description: Главный файл оркестратора.
  */
 
@@ -62,7 +62,7 @@
  uint32_t lastTelemetryTime = 0; // Таймер для телеметрии
  
  bool isLonScaleSet = false; // Флаг: был ли рассчитан коэффициент сжатия долготы
- float lastScaleLat = 0.0f;  // ИЗМЕНЕНИЕ 1.35: Широта, при которой последний раз был рассчитан масштаб                            
+ float lastScaleLat = 0.0f;  // Широта, при которой последний раз был рассчитан масштаб                            
  
  // Расчет джиттера (рандомизированной задержки) для умной ретрансляции пакета
  uint32_t calculateRelayJitter(uint8_t myRole, uint8_t senderRole, float snr) {
@@ -137,7 +137,7 @@
     
     myMsgSeq = 0; // Сбрасываем счетчик пакетов
     
-    char myName[12];
+    char myName[24]; // ИЗМЕНЕНИЕ 1.38: Буфер расширен до 24 байт
     snprintf(myName, sizeof(myName), "Node-%d", myNodeId);
     
     // Рассылаем новый ID по сети с наивысшим приоритетом
@@ -202,7 +202,8 @@ void scanNetwork(bool isWarmStart) {
                     
                     if (router.isValidPacket(rxHeader.getType(), payloadLen)) {
                         if (!router.isDuplicate(rxHeader.senderId, rxHeader.msgSeq)) {
-                            packetManager.processPacket(rxHeader, rxBuffer + sizeof(NavigaHeader));
+                            // ИЗМЕНЕНИЕ 1.38: Передача payloadLen
+                            packetManager.processPacket(rxHeader, rxBuffer + sizeof(NavigaHeader), payloadLen);
                         } 
                     } 
                 } 
@@ -273,7 +274,7 @@ void scanNetwork(bool isWarmStart) {
      nodeDB.ageAllNodes(settingsManager.settings.nodeConnectionTimeout + 1000);
  
      // Гарантируем, что наш локальный узел свежий и активный поверх слепка
-     char myName[12];
+     char myName[24]; // ИЗМЕНЕНИЕ 1.38: Буфер расширен до 24 байт
      strncpy(myName, settingsManager.settings.nodeName, sizeof(myName)-1);
      myName[sizeof(myName)-1] = '\0';
      
@@ -371,7 +372,9 @@ void scanNetwork(bool isWarmStart) {
          
          settingsManager.settings.nodeId = myNodeId;
          settingsManager.settings.nodeType = myNodeType;
-         strncpy(settingsManager.settings.nodeName, bleManager.newIdentity.myName, 11);
+         // ИЗМЕНЕНИЕ 1.38: Безопасное копирование расширенного буфера
+         strncpy(settingsManager.settings.nodeName, bleManager.newIdentity.myName, sizeof(settingsManager.settings.nodeName)-1);
+         settingsManager.settings.nodeName[sizeof(settingsManager.settings.nodeName)-1] = '\0';
          settingsManager.save();
  
          // Уведомляем Mesh-сеть о смене нашего Имени/Роли
@@ -523,7 +526,8 @@ void scanNetwork(bool isWarmStart) {
                             // Флаг для определения, впервые ли мы слышим этот узел
                             bool isNewNode = !nodeDB.isNodeActive(rxHeader.senderId);
                             // Распаковка payload в зависимости от типа
-                            packetManager.processPacket(rxHeader, rxBuffer + sizeof(NavigaHeader));
+                            // ИЗМЕНЕНИЕ 1.38: Передача payloadLen
+                            packetManager.processPacket(rxHeader, rxBuffer + sizeof(NavigaHeader), payloadLen);
  
                             // Уведомление смартфона о новых данных узла по BLE
                             const NodeRecord* updatedNode = nodeDB.getNode(rxHeader.senderId);
@@ -640,7 +644,7 @@ void scanNetwork(bool isWarmStart) {
          // Распаковка упакованных координат
          if (gps.isValid()) {
              float currentLat = gps.getLat();
-             // ИЗМЕНЕНИЕ 1.35: Динамический пересчет масштаба при смещении по широте (> 1 градуса)
+             // Динамический пересчет масштаба при смещении по широте (> 1 градуса)
              if (!isLonScaleSet || abs(currentLat - lastScaleLat) > 1.0f) {
                  packer.updateLonScale(currentLat); // Устанавливаем масштаб по широте
                  lastScaleLat = currentLat;

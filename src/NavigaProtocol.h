@@ -1,8 +1,8 @@
 /**
  * File: NavigaProtocol.h
- * Version: 1.1.2
+ * Version: 1.37
  * Description: Добавлены типы узлов (Tracker, Stalker, Relay) в структуру NodeInfo.
- * Изменение: Приведение к новым правилам оформления (комментирование скобок).
+ * Изменение: Переход на пакеты переменной длины и увеличение буфера имени узла до 24 байт (Шаг 1).
  */
  #ifndef NAVIGA_PROTOCOL_H
  #define NAVIGA_PROTOCOL_H
@@ -51,10 +51,10 @@
      uint32_t packedCoords; // Сжатые через GeoPacker координаты
  }; // struct PayloadCoords
  
- // Полезная нагрузка пакета NodeInfo (12 байт)
+ // Полезная нагрузка пакета NodeInfo (макс 24 байта)
  struct PayloadNodeInfo {
      uint8_t nodeType;
-     char nodeName[11]; // Строго 11 байт (+1 байт типа = 12 байт Payload) - Завершается нуль-терминатором
+     char nodeName[23]; // ИЗМЕНЕНИЕ 1.37: Расширен до 23 байт (+1 байт типа = макс 24 байта Payload). Завершается нуль-терминатором.
  }; // struct PayloadNodeInfo
  
  // Полезная нагрузка пакета выхода из сети (1 байт)
@@ -62,19 +62,21 @@
      uint8_t reason; // Код причины выхода
  }; // struct PayloadLeave
  
- // Структура для возврата политики обработки конкретного типа пакета
+ // ИЗМЕНЕНИЕ 1.37: Структура для возврата политики обработки с диапазоном размеров
  struct MessagePolicy {
      bool isRoutable;     // Подлежит ли ретрансляции
-     size_t expectedSize; // Ожидаемый размер полезной нагрузки в байтах
+     size_t minSize;      // Минимально допустимый размер
+     size_t maxSize;      // Максимально допустимый размер
  }; // struct MessagePolicy
  
- // Функция маппинга типа сообщения на его политику обработки
+ // ИЗМЕНЕНИЕ 1.37: Функция маппинга типа сообщения на его политику обработки с диапазонами
  inline MessagePolicy getMessagePolicy(uint8_t msgType) {
      switch (msgType) {
-         case MSG_COORDS:     return {true,  sizeof(PayloadCoords)};
-         case MSG_NODE_INFO:  return {true,  sizeof(PayloadNodeInfo)};
-         case MSG_LEAVE:      return {false, sizeof(PayloadLeave)};
-         default:             return {false, 0};
+         case MSG_COORDS:     return {true,  sizeof(PayloadCoords), sizeof(PayloadCoords)};
+         // MSG_NODE_INFO минимум: 1 байт роли + 1 байт нуль-терминатор (2 байта). Максимум: 24 байта.
+         case MSG_NODE_INFO:  return {true,  2,                     sizeof(PayloadNodeInfo)};
+         case MSG_LEAVE:      return {false, sizeof(PayloadLeave),  sizeof(PayloadLeave)};
+         default:             return {false, 0,                     0};
      } // switch (msgType)
  } // getMessagePolicy()
  

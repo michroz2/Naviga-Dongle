@@ -1,6 +1,7 @@
 /**
  * File: NodeDatabase.h
- * Version: 1.17 Изменение: Добавлен метод hasNodesInOppositeDirection и массив квадрантов.
+ * Version: 1.38 
+ * Изменение: Увеличен размер буфера nodeName до 24 байт (Шаг 2).
  * Description: Заголовочный файл локальной базы данных активных узлов.
  */
  #ifndef NODE_DATABASE_H
@@ -18,7 +19,7 @@
  struct NodeRecord {
      uint8_t nodeId;
      uint8_t type;       // Тип узла (Роль)
-     char nodeName[12];  // Соразмерно Payload (с запасом под \0)
+     char nodeName[24];  // ИЗМЕНЕНИЕ 1.38: Увеличен до 24 байт
      float lat;
      float lon;
      uint32_t packedCoords; // Сырые запакованные координаты (до распаковки GeoPacker)
@@ -54,7 +55,7 @@
     void updateTopology();
     float getCachedMaxDist() const;
     
-    // НОВОЕ: Векторный фильтр
+    // Векторный фильтр
     bool hasNodesInOppositeDirection(uint8_t referenceNodeId) const;
 
     // Искусственное старение узлов (сдвиг lastSeen в прошлое) для Warm Start

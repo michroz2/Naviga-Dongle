@@ -1,8 +1,8 @@
 /**
  * File: SettingsManager.h
- * Version: 1.27
+ * Version: 1.38
  * Description: Управление энергонезависимой памятью (NVS) ESP32.
- * Сохранение настроек и слепков топологии (реализация UC-03).
+ * Изменение: Буфер name в SavedNodeRecord расширен до 24 байт (Шаг 2).
  */
 
  #ifndef SETTINGS_MANAGER_H
@@ -21,7 +21,7 @@
  struct SavedNodeRecord {
      uint8_t id;
      uint8_t role;
-     char name[12];
+     char name[24]; // ИЗМЕНЕНИЕ 1.38: Увеличен до 24 байт
      uint32_t packedCoords;
  };
  #pragma pack(pop)
@@ -55,4 +55,3 @@
  extern SettingsManager settingsManager;
  
  #endif // SETTINGS_MANAGER_H
- 
