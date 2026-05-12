@@ -1,8 +1,8 @@
 /**
  * Project: Naviga-Dongle (T-Beam v1.1 / T-Energy S3 + Custom E22 + GPS)
  * File: main.cpp
- * Version: 1.44 (Refactored)
- * Изменение: Логика сети вынесена в NetworkManager. Очистка основного файла оркестратора.
+ * Version: 1.45 (Refactored)
+ * Изменение: Гео-вычисления вынесены в CoordProcessor.
  * Description: Главный файл оркестратора.
  */
 
@@ -23,14 +23,15 @@
  #include "TxManager.h"         
  #include "BleManager.h"        
  #include "SettingsManager.h"   
- #include "NetworkManager.h"    // ИЗМЕНЕНИЕ 1.44
+ #include "NetworkManager.h"    
+ #include "CoordProcessor.h"    // ИЗМЕНЕНИЕ 1.45
  
  // --- НАСТРОЙКИ СКАНИРОВАНИЯ ---
- uint32_t networkScanDuration = 30000; // 30 секунд сканирования при включении
+ uint32_t networkScanDuration = 30000; 
  
- uint8_t myNodeId = 0;   // Локальный ID устройства в Mesh-сети
- uint8_t myMsgSeq = 0;   // Счетчик исходящих пакетов (sequence)
- uint8_t myNodeType = NODE_RELAY; // Роль узла по умолчанию (перезапишется из настроек)
+ uint8_t myNodeId = 0;   
+ uint8_t myMsgSeq = 0;   
+ uint8_t myNodeType = NODE_RELAY; 
  
  // Инициализация глобальных менеджеров подсистем
  PowerManager power;                                                        
@@ -43,14 +44,14 @@
  BleManager bleManager; 
  PacketManager packetManager(nodeDB, gps, packer, bleManager);
  TxManager txManager(radio, packer, myNodeId, myMsgSeq);
- // ИЗМЕНЕНИЕ 1.44: Инициализация сетевого менеджера
  NetworkManager networkManager(radio, nodeDB, display, gps, txManager, bleManager, router, packetManager);
+ // ИЗМЕНЕНИЕ 1.45: Инициализация гео-процессора
+ CoordProcessor coordProcessor;
  
- volatile bool receivedFlag = false; // Флаг прерывания от модуля LoRa (ISR)                       
+ volatile bool receivedFlag = false;                       
  
- // ISR Коллбэк для обработки прерывания (Packet Received)
  #if defined(ESP8266) || defined(ESP32)
-   ICACHE_RAM_ATTR // Помещаем функцию в оперативную память для быстродействия
+   ICACHE_RAM_ATTR 
  #endif
  void setFlag(void) {
      receivedFlag = true;
@@ -62,12 +63,9 @@
  uint32_t lastCleanupTime = 0;                                
  uint32_t lastHeartbeatTime = 0;   
  uint32_t lastTopologyUpdateTime = 0;
- uint32_t lastTelemetryTime = 0; // Таймер для телеметрии
+ uint32_t lastTelemetryTime = 0; 
  
- bool isLonScaleSet = false; // Флаг: был ли рассчитан коэффициент сжатия долготы
- float lastScaleLat = 0.0f;  // Широта, при которой последний раз был рассчитан масштаб                            
- 
- // Коллбэк для обновления экрана (используется внутри менеджеров)
+ // Коллбэк для обновления экрана
  void updateScreenCb(String line1, String line2, String line3, String line4) {
      display.showStatus(line1, line2, line3, line4);
  } 
@@ -85,13 +83,11 @@
      while (!Serial && (millis() - start < 3000)); 
      LOG_INFO("SYS", "--- DONGLE BOOT START ---");
      
-     // Отключаем встроенный LoRa, если это плата T-Beam v1.1
      #ifdef BOARD_T_BEAM_V11
      pinMode(LORA_ONBOARD_CS, OUTPUT);
      digitalWrite(LORA_ONBOARD_CS, HIGH);
      #endif
  
-     // Аппаратный сброс LoRa-модуля
      pinMode(LORA_RST, OUTPUT);
      digitalWrite(LORA_RST, LOW);
      delay(20);  
@@ -108,16 +104,13 @@
  
      bleManager.init();
      
-     settingsManager.init(); // Инициализация энергонезависимой памяти
+     settingsManager.init(); 
      myNodeId = settingsManager.settings.nodeId;
      myNodeType = settingsManager.settings.nodeType;
  
-     settingsManager.loadNodesSnapshot(nodeDB); // Загружаем "снимки" соседей
- 
-     // Искусственно стартим восстановленные узлы, чтобы при Warm Start они были "серыми"
+     settingsManager.loadNodesSnapshot(nodeDB); 
      nodeDB.ageAllNodes(settingsManager.settings.nodeConnectionTimeout + 1000);
  
-     // Гарантируем, что наш локальный узел свежий и активный поверх слепка
      char myName[24]; 
      strncpy(myName, settingsManager.settings.nodeName, sizeof(myName)-1);
      myName[sizeof(myName)-1] = '\0';
@@ -125,7 +118,6 @@
      nodeDB.addNode(myNodeId);
      nodeDB.updateNodeInfo(myNodeId, myName, myNodeType);
  
-     // Если устройство является стационарным ретранслятором, задаем ему статические координаты
      if (myNodeType == NODE_RELAY) {
          gps.setStaticLocation(RELAY_STATIC_LAT, RELAY_STATIC_LON);
      }
@@ -136,7 +128,6 @@
          delay(3000);
      } 
  
-     // ИЗМЕНЕНИЕ 1.44: Вызов сетевого сканирования через NetworkManager
      if (myNodeId == 0 || !settingsManager.settings.isConfigured) {
          networkManager.scanNetwork(false, networkScanDuration, myNodeId); 
          settingsManager.settings.nodeId = myNodeId;
@@ -146,9 +137,7 @@
          networkManager.scanNetwork(true, networkScanDuration, myNodeId);  
      }
      
-     // Рассылаем по эфиру свое приветствие
      txManager.sendNodeInfo(myName, myNodeType, TX_NORMAL);
-     
      lastTxTime = millis(); 
  } 
  
@@ -271,45 +260,42 @@
                  memcpy(&rxHeader, rxBuffer, sizeof(NavigaHeader));
                  size_t payloadLen = len - sizeof(NavigaHeader);
                  
-                 bool isCollision = false;
-                 if (rxHeader.relayId == myNodeId) isCollision = true;
+                 if (rxHeader.relayId == myNodeId) networkManager.handleCollision(myNodeId, myMsgSeq, myNodeType);
                  else if (rxHeader.senderId == myNodeId) {
                      int8_t seqDiff = (int8_t)(myMsgSeq - rxHeader.msgSeq);
-                     if (seqDiff <= 0 || seqDiff > 10) isCollision = true;
+                     if (seqDiff <= 0 || seqDiff > 10) networkManager.handleCollision(myNodeId, myMsgSeq, myNodeType);
                  } 
- 
-                 if (isCollision) networkManager.handleCollision(myNodeId, myMsgSeq, myNodeType); // ИЗМЕНЕНИЕ 1.44
  
                  if (rxHeader.relayId != myNodeId) nodeDB.updateNodeSNR(rxHeader.relayId, currentSNR);
  
-                 if (!router.isValidPacket(rxHeader.getType(), payloadLen)) { /* Log Warn */ }
-                 else if (router.isDuplicate(rxHeader.senderId, rxHeader.msgSeq)) {
-                     if (!nodeDB.hasNodesInOppositeDirection(rxHeader.relayId)) txManager.abortRelay(rxHeader.senderId, rxHeader.msgSeq);
-                 } else {
-                        bool isNewNode = !nodeDB.isNodeActive(rxHeader.senderId);
-                        packetManager.processPacket(rxHeader, rxBuffer + sizeof(NavigaHeader), payloadLen);
-                        const NodeRecord* updatedNode = nodeDB.getNode(rxHeader.senderId);
-                        if (updatedNode != nullptr) {
-                            BleEvtNodeUpdate update;
-                            update.opCode = EVT_NODE_UPDATE; update.nodeId = updatedNode->nodeId;
-                            update.nodeRole = updatedNode->type; strncpy(update.nodeName, updatedNode->nodeName, 23);
-                            update.lat = updatedNode->lat; update.lon = updatedNode->lon;
-                            update.snr = updatedNode->snr; update.lastSeenAge = millis() - updatedNode->lastSeen;
-                            bleManager.sendNodeUpdate(update);
-                        }
-                        if (isNewNode && rxHeader.senderId != myNodeId) {
-                            lastHeartbeatTime = millis() - HEARTBEAT_INTERVAL_MS + random(MIN_GREETING_NODEINFO_JITTER, MAX_GREETING_NODEINFO_JITTER);
-                            settingsManager.saveNodesSnapshot(nodeDB);
-                        } 
-                        if (router.shouldRetransmit(rxHeader, nodeDB, myNodeType, currentSpeed)) {
-                            uint8_t sRole = NODE_STALKER;
-                            const NodeRecord* sn = nodeDB.getNode(rxHeader.senderId);
-                            if (sn) sRole = sn->type;
-                            // ИЗМЕНЕНИЕ 1.44: Вызов джиттера через NetworkManager
-                            uint32_t jitter = networkManager.calculateRelayJitter(myNodeType, sRole, currentSNR);
-                            txManager.enqueueRelay(rxHeader, rxBuffer + sizeof(NavigaHeader), payloadLen, jitter);
-                        } 
-                 } 
+                 if (router.isValidPacket(rxHeader.getType(), payloadLen)) {
+                     if (router.isDuplicate(rxHeader.senderId, rxHeader.msgSeq)) {
+                         if (!nodeDB.hasNodesInOppositeDirection(rxHeader.relayId)) txManager.abortRelay(rxHeader.senderId, rxHeader.msgSeq);
+                     } else {
+                            bool isNewNode = !nodeDB.isNodeActive(rxHeader.senderId);
+                            packetManager.processPacket(rxHeader, rxBuffer + sizeof(NavigaHeader), payloadLen);
+                            const NodeRecord* updatedNode = nodeDB.getNode(rxHeader.senderId);
+                            if (updatedNode != nullptr) {
+                                BleEvtNodeUpdate update;
+                                update.opCode = EVT_NODE_UPDATE; update.nodeId = updatedNode->nodeId;
+                                update.nodeRole = updatedNode->type; strncpy(update.nodeName, updatedNode->nodeName, 23);
+                                update.lat = updatedNode->lat; update.lon = updatedNode->lon;
+                                update.snr = updatedNode->snr; update.lastSeenAge = millis() - updatedNode->lastSeen;
+                                bleManager.sendNodeUpdate(update);
+                            }
+                            if (isNewNode && rxHeader.senderId != myNodeId) {
+                                lastHeartbeatTime = millis() - HEARTBEAT_INTERVAL_MS + random(MIN_GREETING_NODEINFO_JITTER, MAX_GREETING_NODEINFO_JITTER);
+                                settingsManager.saveNodesSnapshot(nodeDB);
+                            } 
+                            if (router.shouldRetransmit(rxHeader, nodeDB, myNodeType, currentSpeed)) {
+                                uint8_t sRole = NODE_STALKER;
+                                const NodeRecord* sn = nodeDB.getNode(rxHeader.senderId);
+                                if (sn) sRole = sn->type;
+                                uint32_t jitter = networkManager.calculateRelayJitter(myNodeType, sRole, currentSNR);
+                                txManager.enqueueRelay(rxHeader, rxBuffer + sizeof(NavigaHeader), payloadLen, jitter);
+                            } 
+                     }
+                 }
              }
          } 
          radio.startReceive(); 
@@ -317,29 +303,15 @@
  
     // === АДАПТИВНАЯ ОТПРАВКА КООРДИНАТ (SMART TX) ===
     if (gps.isValid()) {
-        bool shouldTransmit = false;
         const NodeRecord* myRecord = nodeDB.getNode(myNodeId);
         float distFromLastTx = (myRecord != nullptr) ? myRecord->distance : 0.0f;
         uint32_t now = millis();
  
-        if ((distFromLastTx > MIN_MOVEMENT_METERS && currentSpeed > MIN_SPEED_KMPH) || (distFromLastTx > SNEAK_MOVEMENT_METERS)) {
-            shouldTransmit = true;
-        } 
+        bool shouldTransmit = (distFromLastTx > MIN_MOVEMENT_METERS && currentSpeed > MIN_SPEED_KMPH) || (distFromLastTx > SNEAK_MOVEMENT_METERS);
  
-        if (shouldTransmit && (now - lastTxTime >= settingsManager.settings.txIntervalMoving)) {
+        if ((shouldTransmit && (now - lastTxTime >= settingsManager.settings.txIntervalMoving)) || (now - lastTxTime >= settingsManager.settings.txIntervalStill)) {
             txManager.sendCoords(gps.getLat(), gps.getLon(), TX_HIGH);
             nodeDB.updateNodeCoords(myNodeId, gps.getLat(), gps.getLon(), 0); 
-            if (bleManager.getBleStatus() == BLE_CONNECTED) {
-                BleEvtNodeUpdate update;
-                update.opCode = EVT_NODE_UPDATE; update.nodeId = myNodeId; update.nodeRole = myNodeType;
-                strncpy(update.nodeName, settingsManager.settings.nodeName, 23); update.lat = gps.getLat();
-                update.lon = gps.getLon(); update.snr = 0.0f; update.lastSeenAge = 0;
-                bleManager.sendNodeUpdate(update);
-            }
-            lastTxTime = now;
-        } else if (now - lastTxTime >= settingsManager.settings.txIntervalStill) {
-            txManager.sendCoords(gps.getLat(), gps.getLon(), TX_HIGH);
-            nodeDB.updateNodeCoords(myNodeId, gps.getLat(), gps.getLon(), 0);
             if (bleManager.getBleStatus() == BLE_CONNECTED) {
                 BleEvtNodeUpdate u; u.opCode = EVT_NODE_UPDATE; u.nodeId = myNodeId; u.nodeRole = myNodeType;
                 strncpy(u.nodeName, settingsManager.settings.nodeName, 23); u.lat = gps.getLat();
@@ -347,7 +319,7 @@
                 bleManager.sendNodeUpdate(u);
             }
             lastTxTime = now;
-        } 
+        }
     } 
  
      txManager.processQueue();
@@ -362,29 +334,13 @@
          bool isTargetValid = (targetNode != nullptr && targetNode->isActive);
          if (!isTargetValid && currentTargetId != 0) { packetManager.clearLastTargetId(); currentTargetId = 0; } 
  
-         if (gps.isValid()) {
-             float currentLat = gps.getLat();
-             if (!isLonScaleSet || abs(currentLat - lastScaleLat) > 1.0f) { packer.updateLonScale(currentLat); lastScaleLat = currentLat; isLonScaleSet = true; } 
-             if (!isFastTracker) {
-                 for (int i = 1; i < 255; i++) {
-                     const NodeRecord* node = nodeDB.getNode(i);
-                     if (node != nullptr && node->isActive) {
-                         if (node->packedCoords != 0 && node->lat == 0.0f && node->lon == 0.0f) {
-                             float unpLat, unpLon; packer.unpack(node->packedCoords, gps.getLat(), gps.getLon(), unpLat, unpLon);
-                             nodeDB.updateNodeCoords(i, unpLat, unpLon, node->packedCoords, false);
-                         } 
-                         if (node->lat != 0.0f || node->lon != 0.0f) {
-                             nodeDB.updateNodeDistanceAzimuth(i, gps.distanceTo(node->lat, node->lon), gps.courseTo(node->lat, node->lon));
-                         } 
-                     } 
-                 } 
-             } 
-         } 
+         // ИЗМЕНЕНИЕ 1.45: Вызов фоновых расчетов через CoordProcessor
+         coordProcessor.process(nodeDB, gps, packer, isFastTracker);
+ 
          int tDist = isTargetValid ? (int)targetNode->distance : 0;
          int tAz = isTargetValid ? (int)targetNode->azimuth : 0;
-         // ИЗМЕНЕНИЕ 1.44: Вызов качества связи через NetworkManager
          int tQual = isTargetValid ? networkManager.getConnectionQuality(targetNode->nodeId, myNodeId) : 0;
          display.updateMainScreen(bleManager.macSuffix, gps.isValid(), sats, myNodeId, myMsgSeq, 
                                   nodeDB.getActiveNodesCount(), isTargetValid, currentTargetId, tDist, tAz, tQual, bleManager.getBleStatus());
      } 
- } //main.cpp
+ }
