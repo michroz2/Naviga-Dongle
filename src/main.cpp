@@ -1,8 +1,9 @@
 /**
- * Project: Naviga-Dongle
+ * Project: Naviga-Dongle (T-Beam v1.1 / T-Energy S3 + Custom E22 + GPS)
  * File: main.cpp
- * Version: 1.41
- * Изменение: Передача ссылки на bleManager в конструктор packetManager (v1.41).
+ * Version: 1.43 
+ * Изменение: Реализация «Симметричной выгрузки себя» — отправка своих координат по BLE.
+ * Description: Главный файл оркестратора.
  */
 
  #include <Arduino.h>
@@ -23,11 +24,14 @@
  #include "BleManager.h"        
  #include "SettingsManager.h"   
  
- uint32_t networkScanDuration = 30000; 
- uint8_t myNodeId = 0;   
- uint8_t myMsgSeq = 0;   
- uint8_t myNodeType = NODE_RELAY; 
+ // --- НАСТРОЙКИ СКАНИРОВАНИЯ ---
+ uint32_t networkScanDuration = 30000; // 30 секунд сканирования при включении
  
+ uint8_t myNodeId = 0;   // Локальный ID устройства в Mesh-сети
+ uint8_t myMsgSeq = 0;   // Счетчик исходящих пакетов (sequence)
+ uint8_t myNodeType = NODE_RELAY; // Роль узла по умолчанию (перезапишется из настроек)
+ 
+ // Инициализация глобальных менеджеров подсистем
  PowerManager power;                                                        
  DisplayManager display(0x3c, I2C_SDA, I2C_SCL); 
  GpsManager gps;                                                        
@@ -35,32 +39,31 @@
  GeoPacker packer;                                                       
  NodeDatabase nodeDB;                                                   
  Retranslation router;                                                   
- BleManager bleManager; // Сдвинуто выше для инициализации packetManager
-
- // ИЗМЕНЕНИЕ 1.41: Добавлен bleManager в инициализацию
+ BleManager bleManager; 
  PacketManager packetManager(nodeDB, gps, packer, bleManager);
  TxManager txManager(radio, packer, myNodeId, myMsgSeq);
  
- volatile bool receivedFlag = false; 
-
+ volatile bool receivedFlag = false; // Флаг прерывания от модуля LoRa (ISR)                       
+ 
+ // ISR Коллбэк для обработки прерывания (Packet Received)
  #if defined(ESP8266) || defined(ESP32)
-   ICACHE_RAM_ATTR 
+   ICACHE_RAM_ATTR // Помещаем функцию в оперативную память для быстродействия
  #endif
  void setFlag(void) {
      receivedFlag = true;
  } 
  
+ // Системные таймеры
  uint32_t lastTxTime = 0;                                
  uint32_t lastGpsLogTime = 0;                            
  uint32_t lastCleanupTime = 0;                                
  uint32_t lastHeartbeatTime = 0;   
  uint32_t lastTopologyUpdateTime = 0;
- uint32_t lastTelemetryTime = 0; 
+ uint32_t lastTelemetryTime = 0; // Таймер для телеметрии
  
- bool isLonScaleSet = false; 
- float lastScaleLat = 0.0f;  
-
-  
+ bool isLonScaleSet = false; // Флаг: был ли рассчитан коэффициент сжатия долготы
+ float lastScaleLat = 0.0f;  // Широта, при которой последний раз был рассчитан масштаб                            
+ 
  // Расчет джиттера (рандомизированной задержки) для умной ретрансляции пакета
  uint32_t calculateRelayJitter(uint8_t myRole, uint8_t senderRole, float snr) {
      uint32_t minMs, maxMs;
@@ -595,12 +598,45 @@ void scanNetwork(bool isWarmStart) {
             txManager.sendCoords(gps.getLat(), gps.getLon(), TX_HIGH);
             nodeDB.updateNodeCoords(myNodeId, gps.getLat(), gps.getLon(), 0); 
             LOG_INFO("ACTION", "Adaptive TX (Moving): Dist: %.1fm", distFromLastTx);
+            
+            // ИЗМЕНЕНИЕ 1.43: Симметричная выгрузка себя в смартфон по BLE
+            if (bleManager.getBleStatus() == BLE_CONNECTED) {
+                BleEvtNodeUpdate update;
+                update.opCode = EVT_NODE_UPDATE;
+                update.nodeId = myNodeId;
+                update.nodeRole = myNodeType;
+                strncpy(update.nodeName, settingsManager.settings.nodeName, sizeof(update.nodeName)-1);
+                update.nodeName[sizeof(update.nodeName)-1] = '\0';
+                update.lat = gps.getLat();
+                update.lon = gps.getLon();
+                update.snr = 0.0f; // Техническая заглушка для себя
+                update.lastSeenAge = 0;
+                bleManager.sendNodeUpdate(update);
+                LOG_INFO("BLE", "Symmetric sync: Sent own coordinates to App");
+            }
+
             lastTxTime = now;
         } else if (now - lastTxTime >= settingsManager.settings.txIntervalStill) {
             // Если стоим на месте, отправляем Heartbeat-координаты по длинному таймеру
             txManager.sendCoords(gps.getLat(), gps.getLon(), TX_HIGH);
             nodeDB.updateNodeCoords(myNodeId, gps.getLat(), gps.getLon(), 0);
             LOG_INFO("ACTION", "Adaptive TX (Still Heartbeat)");
+
+            // ИЗМЕНЕНИЕ 1.43: Симметричная выгрузка себя (Heartbeat) в смартфон по BLE
+            if (bleManager.getBleStatus() == BLE_CONNECTED) {
+                BleEvtNodeUpdate update;
+                update.opCode = EVT_NODE_UPDATE;
+                update.nodeId = myNodeId;
+                update.nodeRole = myNodeType;
+                strncpy(update.nodeName, settingsManager.settings.nodeName, sizeof(update.nodeName)-1);
+                update.nodeName[sizeof(update.nodeName)-1] = '\0';
+                update.lat = gps.getLat();
+                update.lon = gps.getLon();
+                update.snr = 0.0f;
+                update.lastSeenAge = 0;
+                bleManager.sendNodeUpdate(update);
+            }
+
             lastTxTime = now;
         } 
     } else {
