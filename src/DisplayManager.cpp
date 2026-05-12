@@ -1,6 +1,7 @@
 /**
  * File: DisplayManager.cpp
- * Version: 1.32 Изменение: Перестановка строк на дисплее, вывод MAC-суффикса.
+ * Version: 1.42 
+ * Изменение: Вывод динамической версии из VERSION_STR и увеличение задержки до 3с.
  */
  #include "DisplayManager.h"
 
@@ -28,10 +29,16 @@
      _display.clear();
      _display.setFont(ArialMT_Plain_16);
      _display.drawString(0, 0,  "Naviga-Dongle");
-     _display.drawString(0, 22, "System Init...");
+     
+     // ИЗМЕНЕНИЕ 1.42: Использование централизованного макроса VERSION_STR
+     String versionLine = "v" + String(VERSION_STR) + " init...";
+     _display.drawString(0, 22, versionLine);
+     
      _display.drawString(0, 44, "BLE: NimBLE Ready");
      _display.display();
-     delay(2000); // Задержка для того, чтобы пользователь успел прочитать
+     
+     // ИЗМЕНЕНИЕ 1.42: Задержка увеличена до 3 секунд
+     delay(3000); 
  #endif
  }
  
@@ -98,4 +105,4 @@ showStatus(line1, line2, line3, line4);
  #if HAS_STATUS_LED
      digitalWrite(LED_PIN, !digitalRead(LED_PIN)); 
  #endif
- }
+ } //DisplayManager.cpp
