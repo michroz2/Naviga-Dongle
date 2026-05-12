@@ -1,7 +1,7 @@
 /**
  * File: BleManager.h
- * Version: 1.40 
- * Изменение: В методе sendNodeUpdate удалены параметры distance и azimuth (v1.40).
+ * Version: 1.41
+ * Изменение: Добавлен метод sendNodeDelete для уведомления Оператора об удалении узла (v1.41).
  * Description: Управление BLE-стеком (через библиотеку NimBLE) и реализация протокола Naviga (UC-04).
  */
 
@@ -26,6 +26,7 @@
      void sendIdentity(uint8_t nodeId, const char* name, uint8_t role);
      void sendSysConfig(uint32_t txMoving, uint32_t txStill, uint32_t connTimeout, uint32_t activeTimeout);
      void sendNodeUpdate(const BleEvtNodeUpdate& nodeData);
+     void sendNodeDelete(uint8_t nodeId); // ИЗМЕНЕНИЕ 1.41
      void sendMyStatus(uint8_t gpsValid, uint8_t satellites, uint8_t batteryPercent, uint16_t batteryVoltage); // ИЗМЕНЕНИЕ 1.34
  
      // --- Флаги и буферы ---

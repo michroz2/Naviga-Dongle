@@ -1,9 +1,8 @@
 /**
- * Project: Naviga-Dongle (T-Beam v1.1 / T-Energy S3 + Custom E22 + GPS)
+ * Project: Naviga-Dongle
  * File: main.cpp
- * Version: 1.40 
- * Изменение: Оптимизация BLE - удаление передачи distance и azimuth в смартфон (UC-16a).
- * Description: Главный файл оркестратора.
+ * Version: 1.41
+ * Изменение: Передача ссылки на bleManager в конструктор packetManager (v1.41).
  */
 
  #include <Arduino.h>
@@ -24,14 +23,11 @@
  #include "BleManager.h"        
  #include "SettingsManager.h"   
  
- // --- НАСТРОЙКИ СКАНИРОВАНИЯ ---
- uint32_t networkScanDuration = 30000; // 30 секунд сканирования при включении
+ uint32_t networkScanDuration = 30000; 
+ uint8_t myNodeId = 0;   
+ uint8_t myMsgSeq = 0;   
+ uint8_t myNodeType = NODE_RELAY; 
  
- uint8_t myNodeId = 0;   // Локальный ID устройства в Mesh-сети
- uint8_t myMsgSeq = 0;   // Счетчик исходящих пакетов (sequence)
- uint8_t myNodeType = NODE_RELAY; // Роль узла по умолчанию (перезапишется из настроек)
- 
- // Инициализация глобальных менеджеров подсистем
  PowerManager power;                                                        
  DisplayManager display(0x3c, I2C_SDA, I2C_SCL); 
  GpsManager gps;                                                        
@@ -39,31 +35,32 @@
  GeoPacker packer;                                                       
  NodeDatabase nodeDB;                                                   
  Retranslation router;                                                   
- PacketManager packetManager(nodeDB, gps, packer);
+ BleManager bleManager; // Сдвинуто выше для инициализации packetManager
+
+ // ИЗМЕНЕНИЕ 1.41: Добавлен bleManager в инициализацию
+ PacketManager packetManager(nodeDB, gps, packer, bleManager);
  TxManager txManager(radio, packer, myNodeId, myMsgSeq);
- BleManager bleManager;                                                 
  
- volatile bool receivedFlag = false; // Флаг прерывания от модуля LoRa (ISR)                       
- 
- // ISR Коллбэк для обработки прерывания (Packet Received)
+ volatile bool receivedFlag = false; 
+
  #if defined(ESP8266) || defined(ESP32)
-   ICACHE_RAM_ATTR // Помещаем функцию в оперативную память для быстродействия
+   ICACHE_RAM_ATTR 
  #endif
  void setFlag(void) {
      receivedFlag = true;
  } 
  
- // Системные таймеры
  uint32_t lastTxTime = 0;                                
  uint32_t lastGpsLogTime = 0;                            
  uint32_t lastCleanupTime = 0;                                
  uint32_t lastHeartbeatTime = 0;   
  uint32_t lastTopologyUpdateTime = 0;
- uint32_t lastTelemetryTime = 0; // Таймер для телеметрии
+ uint32_t lastTelemetryTime = 0; 
  
- bool isLonScaleSet = false; // Флаг: был ли рассчитан коэффициент сжатия долготы
- float lastScaleLat = 0.0f;  // Широта, при которой последний раз был рассчитан масштаб                            
- 
+ bool isLonScaleSet = false; 
+ float lastScaleLat = 0.0f;  
+
+  
  // Расчет джиттера (рандомизированной задержки) для умной ретрансляции пакета
  uint32_t calculateRelayJitter(uint8_t myRole, uint8_t senderRole, float snr) {
      uint32_t minMs, maxMs;
