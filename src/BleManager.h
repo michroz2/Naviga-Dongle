@@ -1,7 +1,7 @@
 /**
  * File: BleManager.h
- * Version: 1.34 
- * Изменение: Добавлен метод sendMyStatus для отправки телеметрии (GPS и батарея).
+ * Version: 1.40 
+ * Изменение: В методе sendNodeUpdate удалены параметры distance и azimuth (v1.40).
  * Description: Управление BLE-стеком (через библиотеку NimBLE) и реализация протокола Naviga (UC-04).
  */
 

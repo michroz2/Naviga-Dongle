@@ -1,7 +1,7 @@
 /**
  * File: BleManager.cpp
- * Version: 1.34 
- * Изменение: Реализован метод sendMyStatus для отправки пакета телеметрии EVT_MY_STATUS.
+ * Version: 1.40 
+ * Изменение: Обновлен метод sendNodeUpdate в соответствии с новым BleProtocol (v1.40).
  * Description: Реализация менеджера Bluetooth.
  */
 
@@ -146,7 +146,7 @@
  
      LOG_INFO("SYS", "BLE Initialized. Name: %s", devName);
  }
-     
+      
  BleStatus BleManager::getBleStatus() {
      if (_isConnected) return BLE_CONNECTED;
      return BLE_UNPAIRED; 
@@ -186,7 +186,8 @@
      pTxCharacteristic->notify();
  }
  
- // Отправка данных об одном узле. При полном синхроне вызывается множество раз подряд в цикле.
+ // ИЗМЕНЕНИЕ 1.40: Структура пакета в BleProtocol.h изменилась (удалены distance/azimuth).
+ // Здесь мы просто передаем подготовленную структуру в характеристику.
  void BleManager::sendNodeUpdate(const BleEvtNodeUpdate& nodeData) {
      if (!_isConnected) return;
      pTxCharacteristic->setValue((uint8_t*)&nodeData, sizeof(BleEvtNodeUpdate));
@@ -207,4 +208,3 @@
      pTxCharacteristic->setValue((uint8_t*)&packet, sizeof(BleEvtMyStatus));
      pTxCharacteristic->notify();
  }
- //BleManager.cpp

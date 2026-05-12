@@ -2,7 +2,7 @@ import os
 
 # Настройки
 PROJECT_NAME = "Naviga_Dongle"
-VERSION = "1.38"
+VERSION = "1.39"
 OUTPUT_FILE = f"Naviga_Dongle_Snapshot_v{VERSION}.md"
 EXTENSIONS = ('.h', '.cpp', '.hpp', '.c')
 EXCLUDE_DIRS = {'.pio', '.git', 'bin', 'lib'} # Исключаем папки сборки

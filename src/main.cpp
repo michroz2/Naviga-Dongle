@@ -1,28 +1,28 @@
 /**
  * Project: Naviga-Dongle (T-Beam v1.1 / T-Energy S3 + Custom E22 + GPS)
  * File: main.cpp
- * Version: 1.39 
- * Изменение: Команда requestReset теперь вызывает очистку флэш-памяти (UC-08 Factory Reset).
+ * Version: 1.40 
+ * Изменение: Оптимизация BLE - удаление передачи distance и azimuth в смартфон (UC-16a).
  * Description: Главный файл оркестратора.
  */
 
  #include <Arduino.h>
  #include <Wire.h>
- #include <SPI.h>              
+ #include <SPI.h>               
  #include "configuration.h"
- #include "logger.h"            
- #include "GeoPacker.h"        
+ #include "logger.h"             
+ #include "GeoPacker.h"         
  #include "NavigaProtocol.h"
- #include "NodeDatabase.h"     
- #include "Retranslation.h"    
- #include "GpsManager.h"        
- #include "DisplayManager.h"   
- #include "RadioManager.h"     
- #include "PowerManager.h"     
- #include "PacketManager.h"    
- #include "TxManager.h"        
- #include "BleManager.h"       
- #include "SettingsManager.h"  
+ #include "NodeDatabase.h"      
+ #include "Retranslation.h"     
+ #include "GpsManager.h"         
+ #include "DisplayManager.h"    
+ #include "RadioManager.h"      
+ #include "PowerManager.h"      
+ #include "PacketManager.h"     
+ #include "TxManager.h"         
+ #include "BleManager.h"        
+ #include "SettingsManager.h"   
  
  // --- НАСТРОЙКИ СКАНИРОВАНИЯ ---
  uint32_t networkScanDuration = 30000; // 30 секунд сканирования при включении
@@ -32,18 +32,18 @@
  uint8_t myNodeType = NODE_RELAY; // Роль узла по умолчанию (перезапишется из настроек)
  
  // Инициализация глобальных менеджеров подсистем
- PowerManager power;                                       
+ PowerManager power;                                                        
  DisplayManager display(0x3c, I2C_SDA, I2C_SCL); 
- GpsManager gps;                                        
+ GpsManager gps;                                                        
  RadioManager radio; 
- GeoPacker packer;                                       
- NodeDatabase nodeDB;                                   
- Retranslation router;                                   
+ GeoPacker packer;                                                       
+ NodeDatabase nodeDB;                                                   
+ Retranslation router;                                                   
  PacketManager packetManager(nodeDB, gps, packer);
  TxManager txManager(radio, packer, myNodeId, myMsgSeq);
- BleManager bleManager;                                 
+ BleManager bleManager;                                                 
  
- volatile bool receivedFlag = false; // Флаг прерывания от модуля LoRa (ISR)                   
+ volatile bool receivedFlag = false; // Флаг прерывания от модуля LoRa (ISR)                       
  
  // ISR Коллбэк для обработки прерывания (Packet Received)
  #if defined(ESP8266) || defined(ESP32)
@@ -54,9 +54,9 @@
  } 
  
  // Системные таймеры
- uint32_t lastTxTime = 0;                               
+ uint32_t lastTxTime = 0;                                
  uint32_t lastGpsLogTime = 0;                            
- uint32_t lastCleanupTime = 0;                               
+ uint32_t lastCleanupTime = 0;                                
  uint32_t lastHeartbeatTime = 0;   
  uint32_t lastTopologyUpdateTime = 0;
  uint32_t lastTelemetryTime = 0; // Таймер для телеметрии
@@ -351,8 +351,7 @@ void scanNetwork(bool isWarmStart) {
                  update.nodeName[sizeof(update.nodeName)-1] = '\0';
                  update.lat = node->lat;
                  update.lon = node->lon;
-                 update.distance = node->distance;
-                 update.azimuth = node->azimuth;
+                 // ИЗМЕНЕНИЕ 1.40: Поля distance и azimuth удалены из BLE пакета. Расчет на стороне App.
                  update.snr = node->snr;
                  update.lastSeenAge = millis() - node->lastSeen;
                  
@@ -360,7 +359,7 @@ void scanNetwork(bool isWarmStart) {
                  delay(5); // Небольшая задержка, чтобы не переполнить MTU стек Bluetooth
              }
          }
-         LOG_INFO("BLE", "Full topology sync sent to Smartphone");
+         LOG_INFO("BLE", "Full topology sync sent to Smartphone (Optimized v1.40)");
      }
  
      // Получены новые настройки идентификации со смартфона
@@ -520,7 +519,7 @@ void scanNetwork(bool isWarmStart) {
                      } else {
                          // --- ПАКЕТ УСПЕШНО ПРОШЕЛ ВСЕ ФИЛЬТРЫ ---
                          LOG_INFO("LORA", "Valid pkt Type %d from Node %d (Relay: %d, Seq: %d, SNR: %.1f)", 
-                                  rxHeader.getType(), rxHeader.senderId, rxHeader.relayId, rxHeader.msgSeq, currentSNR);
+                                   rxHeader.getType(), rxHeader.senderId, rxHeader.relayId, rxHeader.msgSeq, currentSNR);
                          
                             // Флаг для определения, впервые ли мы слышим этот узел
                             bool isNewNode = !nodeDB.isNodeActive(rxHeader.senderId);
@@ -538,8 +537,7 @@ void scanNetwork(bool isWarmStart) {
                                 update.nodeName[sizeof(update.nodeName)-1] = '\0';
                                 update.lat = updatedNode->lat;
                                 update.lon = updatedNode->lon;
-                                update.distance = updatedNode->distance;
-                                update.azimuth = updatedNode->azimuth;
+                                // ИЗМЕНЕНИЕ 1.40: Удалена передача distance и azimuth. Смартфон считает их сам.
                                 update.snr = updatedNode->snr;
                                 update.lastSeenAge = millis() - updatedNode->lastSeen;
                                 
