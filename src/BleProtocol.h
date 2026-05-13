@@ -1,97 +1,100 @@
 /**
  * File: BleProtocol.h
- * Version: 1.41
- * Description: Описание структур данных для BLE GATT. 
- * Изменение: Добавлен OpCode EVT_NODE_DELETE (0x14) и структура BleEvtNodeDelete (v1.41).
- * Все структуры упакованы без выравнивания (pack 1) для обеспечения кроссплатформенности.
+ * Version: 1.46.3
+ * Изменение: Единый заголовочный файл протокола со статусами и структурами.
+ * Description: Определение протокола связи.
  */
 
  #ifndef BLE_PROTOCOL_H
  #define BLE_PROTOCOL_H
  
- #include <stdint.h>
+ #include <Arduino.h>
  
- #pragma pack(push, 1) // Отключение выравнивания памяти
- 
- // ==========================================================
- // 1. КОДЫ ОПЕРАЦИЙ (OpCodes) - Первый байт каждого пакета
- // ==========================================================
- enum BleOpCode : uint8_t {
-     // Оператор -> Донгл (Запись/Команды)
-     CMD_SET_IDENTITY    = 0x01, // Задать новые Имя и Роль
-     CMD_SET_SYS_CONFIG  = 0x02, // Задать системные тайминги и настройки
-     CMD_ACTION_RESET    = 0x03, // Hard Reset (Перезагрузка микроконтроллера)
-     CMD_ACTION_CLEAR_DB = 0x04, // Очистить базу соседей (Топологию)
-     
-     // Запросы от Оператора к Донглу (при подключении или синхронизации)
-     CMD_REQ_FULL_SYNC   = 0x05, // Запросить всю базу соседей целиком
-     CMD_REQ_IDENTITY    = 0x06, // Запросить текущие Имя и Роль Донгла
-     CMD_REQ_SYS_CONFIG  = 0x07, // Запросить текущие настройки Донгла
- 
-     // Донгл -> Оператор (Уведомления)
-     EVT_MY_STATUS       = 0x10, // Телеметрия (GPS, Батарея)
-     EVT_NODE_UPDATE     = 0x11, // Обновление гео-данных по одному соседу
-     EVT_IDENTITY        = 0x12, // Ответ на запрос: Мои текущие Имя и Роль
-     EVT_SYS_CONFIG      = 0x13, // Ответ на запрос: Мои текущие настройки
-     EVT_NODE_DELETE     = 0x14  // ИЗМЕНЕНИЕ 1.41: Уведомление об удалении узла
+ // Состояния BLE (единое определение)
+ enum BleStatus {
+     BLE_OFF,
+     BLE_UNPAIRED,
+     BLE_CONNECTED
  };
  
- // ==========================================================
- // 2. ИДЕНТИФИКАТОР УЗЛА (Identity)
- // ==========================================================
+ #define SERVICE_UUID           "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
+ #define CHARACTERISTIC_UUID_RX "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
+ #define CHARACTERISTIC_UUID_TX "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
  
- // Пакет от Оператора (CMD_SET_IDENTITY) или ответ от Донгла (EVT_IDENTITY)
+ enum BleOpCode {
+     CMD_SET_IDENTITY    = 0x01,
+     CMD_SET_SYS_CONFIG  = 0x02,
+     CMD_ACTION_RESET    = 0x03,
+     CMD_ACTION_CLEAR_DB = 0x04,
+     CMD_REQ_FULL_SYNC   = 0x05,
+     CMD_REQ_IDENTITY    = 0x06,
+     CMD_REQ_SYS_CONFIG  = 0x07,
+ 
+     EVT_MY_STATUS       = 0x10,
+     EVT_NODE_UPDATE     = 0x11, 
+     EVT_IDENTITY        = 0x12,
+     EVT_SYS_CONFIG      = 0x13,
+     EVT_NODE_DELETE     = 0x14,
+     EVT_NODE_COORDS     = 0x15, 
+     EVT_NODE_INFO       = 0x16  
+ };
+ 
+ #pragma pack(push, 1)
+ 
  struct BleIdentity {
-     uint8_t opCode;             // CMD_SET_IDENTITY или EVT_IDENTITY
-     uint8_t myNodeId;           // ID узла (изменяет Донгл при коллизиях, оператор обычно не трогает)
-     char myName[24];            // ИЗМЕНЕНИЕ 1.38: Имя узла (24 байта)
-     uint8_t myRole;             // 0-Relay, 1-Stalker, 2-Tracker
+     uint8_t opCode;
+     uint8_t myNodeId;
+     char myName[24];
+     uint8_t myRole;
  };
  
- // ==========================================================
- // 3. СИСТЕМНЫЕ НАСТРОЙКИ (SysConfig)
- // ==========================================================
- 
- // Пакет от Оператора (CMD_SET_SYS_CONFIG) или ответ от Донгла (EVT_SYS_CONFIG)
  struct BleSysConfig {
-     uint8_t opCode;                 // CMD_SET_SYS_CONFIG или EVT_SYS_CONFIG
-     uint32_t txIntervalMoving;      // Интервал отправки координат в движении (мс)
-     uint32_t txIntervalStill;       // Интервал отправки Heartbeat на стоянке (мс)
-     uint32_t nodeConnectionTimeout; // Таймаут потери связи (мс) - влияет на UI (серое отображение)
-     uint32_t nodeActiveTimeoutMs;   // Таймаут очистки из базы (мс) - физическое удаление сборщиком мусора
+     uint8_t opCode;
+     uint32_t txIntervalMoving;
+     uint32_t txIntervalStill;
+     uint32_t nodeConnectionTimeout;
+     uint32_t nodeActiveTimeoutMs;
  };
  
- // ==========================================================
- // 4. ТЕЛЕМЕТРИЯ И ТОПОЛОГИЯ 
- // ==========================================================
- 
- // Периодическая рассылка телеметрии самого донгла
  struct BleEvtMyStatus {
-     uint8_t opCode;             // EVT_MY_STATUS (0x10)
-     uint8_t gpsValid;           // 1 - Фикс есть, 0 - нет
-     uint8_t satellites;         // Количество видимых спутников
-     uint8_t batteryPercent;     // Заряд батареи (0-100%)
-     uint16_t batteryVoltage;    // Напряжение батареи в милливольтах (мВ)
+     uint8_t opCode;
+     uint8_t gpsValid;
+     uint8_t satellites;
+     uint8_t batteryPercent;
+     uint16_t batteryVoltage;
  };
  
- // Обновление информации о конкретном соседе (отправляется по запросу или при приеме пакета из эфира)
  struct BleEvtNodeUpdate {
-     uint8_t opCode;             // EVT_NODE_UPDATE (0x11)
-     uint8_t nodeId;             // Идентификатор соседа
-     uint8_t nodeRole;           // Роль соседа
-     char nodeName[24];          // ИЗМЕНЕНИЕ 1.38: Имя соседа (24 байта)
-     float lat;                  // Широта
-     float lon;                  // Долгота
-     float snr;                  // Качество сигнала (SNR)
-     uint32_t lastSeenAge;       // Сколько миллисекунд назад узел был на связи (Возраст)
+     uint8_t opCode;
+     uint8_t nodeId;
+     uint8_t nodeRole;
+     char nodeName[24];
+     float lat;
+     float lon;
+     float snr;
+     uint32_t lastSeenAge;
  };
  
- // ИЗМЕНЕНИЕ 1.41: Структура уведомления об удалении узла
  struct BleEvtNodeDelete {
-     uint8_t opCode;             // EVT_NODE_DELETE (0x14)
-     uint8_t nodeId;             // ID удаляемого узла
+     uint8_t opCode;
+     uint8_t nodeId;
  };
  
- #pragma pack(pop) // Возвращаем выравнивание памяти по умолчанию
+ struct BleEvtNodeCoords {
+     uint8_t opCode;
+     uint8_t nodeId;
+     float lat;
+     float lon;
+     float snr;
+ };
  
- #endif // BLE_PROTOCOL_H
+ struct BleEvtNodeInfo {
+     uint8_t opCode;
+     uint8_t nodeId;
+     uint8_t nodeRole;
+     char nodeName[24];
+ };
+ 
+ #pragma pack(pop)
+ 
+ #endif // BleProtocol.h

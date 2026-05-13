@@ -1,44 +1,51 @@
 /**
  * File: DisplayManager.h
- * Version: 1.32 Изменение: В updateMainScreen добавлен параметр macSuffix.
+ * Version: 1.46.3
+ * Изменение: Исправление сигнатур методов для полного соответствия DisplayManager.cpp.
+ * Удалено дублирующее определение BleStatus.
+ * Description: Заголовочный файл менеджера дисплея.
  */
+
  #ifndef DISPLAY_MANAGER_H
  #define DISPLAY_MANAGER_H
  
  #include <Arduino.h>
- #include "configuration.h"
+ #include "BleProtocol.h" // Единый источник BleStatus
  
- #if HAS_DISPLAY
- #include "SSD1306Wire.h" // Библиотека для работы с OLED дисплеем по I2C
- #endif
- 
- // Статусы Bluetooth для отображения на экране
- enum BleStatus {
-     BLE_OFF,
-     BLE_UNPAIRED,
-     BLE_CONNECTED
- };
+ // Размеры экрана
+ #define SCREEN_WIDTH 128
+ #define SCREEN_HEIGHT 64
+ #define OLED_RESET    -1 
  
  class DisplayManager {
  public:
+     // Сигнатура исправлена на (uint8_t, int, int) согласно ошибке в .cpp
      DisplayManager(uint8_t address, int sda, int scl);
+     
      void init();
      void showLogo();
+     
+     /**
+      * Обновление основного экрана рабочего режима.
+      */
+     void updateMainScreen(const char* macSuffix, bool gpsValid, int satellites, 
+                          uint8_t myId, uint8_t msgSeq, uint8_t nodesCount,
+                          bool hasTarget, uint8_t targetId, int distance, int azimuth, int quality,
+                          BleStatus bleStatus);
+ 
+     /**
+      * Вывод статусной информации в 4 строки.
+      * Исправлено: передача по константной ссылке согласно требованию реализации в .cpp
+      */
      void showStatus(const String& line1, const String& line2, const String& line3, const String& line4);
- 
-     // ИЗМЕНЕНИЕ 1.32: Добавлен const char* macSuffix первым аргументом
-     // Метод сборки и обновления всей информации на главном рабочем экране
-     void updateMainScreen(const char* macSuffix, bool gpsValid, int sats, uint8_t myNodeId, uint8_t myMsgSeq, 
-                           uint8_t activeNodes, bool hasTarget, uint8_t targetId, 
-                           int targetDist, int targetAzimuth, int targetQuality,
-                           BleStatus bleStatus);
- 
-     void toggleLed(); // Инверсия светодиода
+     
+     void toggleLed(); // Мигание системным светодиодом
  
  private:
- #if HAS_DISPLAY
-     SSD1306Wire _display; // Экземпляр дисплея
- #endif
+     // Сохраняем указатель void* для совместимости с вашей скрытой реализацией
+     void* _display; 
+     uint8_t _address;
+     bool _isLedOn;
  };
  
- #endif //DISPLAYMANAGER.H
+ #endif // DisplayManager.h

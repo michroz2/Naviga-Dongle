@@ -1,63 +1,55 @@
 /**
  * File: BleManager.h
- * Version: 1.41
- * Изменение: Добавлен метод sendNodeDelete для уведомления Оператора об удалении узла (v1.41).
- * Description: Управление BLE-стеком (через библиотеку NimBLE) и реализация протокола Naviga (UC-04).
+ * Version: 1.46.3
+ * Изменение: Прототипы для частичных обновлений. Убран дубликат BleStatus.
+ * Description: Заголовочный файл менеджера Bluetooth.
  */
 
  #ifndef BLE_MANAGER_H
  #define BLE_MANAGER_H
  
- #include <Arduino.h>
  #include <NimBLEDevice.h>
- #include "BleConfig.h"
- #include "BleProtocol.h"
- #include "DisplayManager.h" 
+ #include "BleProtocol.h" 
  
  class BleManager {
  public:
      BleManager();
-     void init(); // Инициализация BLE-сервера и рекламных пакетов
+     void init();
+     void process();
      
-     void process(); // Оставлен для совместимости (логика перенесена в main)
      BleStatus getBleStatus();
-
-     // Методы отправки данных (NOTIFY) в смартфон
+     
      void sendIdentity(uint8_t nodeId, const char* name, uint8_t role);
      void sendSysConfig(uint32_t txMoving, uint32_t txStill, uint32_t connTimeout, uint32_t activeTimeout);
      void sendNodeUpdate(const BleEvtNodeUpdate& nodeData);
-     void sendNodeDelete(uint8_t nodeId); // ИЗМЕНЕНИЕ 1.41
-     void sendMyStatus(uint8_t gpsValid, uint8_t satellites, uint8_t batteryPercent, uint16_t batteryVoltage); // ИЗМЕНЕНИЕ 1.34
+     void sendNodeDelete(uint8_t nodeId);
+     void sendMyStatus(uint8_t gpsValid, uint8_t satellites, uint8_t batteryPercent, uint16_t batteryVoltage);
+     
+     void sendNodeCoords(uint8_t id, float lat, float lon, float snr);
+     void sendNodeInfo(uint8_t id, uint8_t role, const char* name);
  
-     // --- Флаги и буферы ---
-     // Выставление флагов при приеме данных. Обработка флагов осуществляется в main.cpp
      bool hasNewIdentity;
      BleIdentity newIdentity;
+     
      bool hasNewSysConfig;
      BleSysConfig newSysConfig;
+     
      bool requestFullSync;
      bool requestReset;
      bool requestClearDB;
      bool requestIdentitySync;
      bool requestSysConfigSync;
-
-     // Храним 4 символа аппаратного MAC-адреса для вывода на экран и в имя
-     char macSuffix[5]; 
-
+ 
+     char macSuffix[5];
+ 
  private:
-     NimBLEServer* pServer;                     // Указатель на BLE-сервер
-     NimBLECharacteristic* pTxCharacteristic;   // Характеристика передачи (NOTIFY)
-     NimBLECharacteristic* pRxCharacteristic;   // Характеристика приема (WRITE)
+     NimBLEServer* pServer;
+     NimBLECharacteristic* pTxCharacteristic;
+     NimBLECharacteristic* pRxCharacteristic;
+     bool _isConnected;
  
-     bool _isConnected; // Состояние подключения смартфона
- 
-     // Вложенные классы для обработки событий (коллбэков) от библиотеки NimBLE
      class ServerCallbacks;
      class RxCallbacks;
- 
-     // Дружественные классы для доступа к приватным переменным (особенно _isConnected и флагам)
-     friend class ServerCallbacks;
-     friend class RxCallbacks;
  };
  
- #endif // BLE_MANAGER_H
+ #endif // BleManager.h
