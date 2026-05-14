@@ -1,10 +1,10 @@
 /**
  * Project: Naviga-Dongle
  * File: DBManager.h
- * Version: 1.43.8
- * Изменение: Асинхронная неблокирующая выгрузка базы (State Machine).
+ * Version: 1.43.9
  * Description: Контроллер базы данных. Управляет идентификацией локального узла,
- * топологией сети, очисткой мусора и синхронизацией с мобильным приложением.
+ * топологией сети и очисткой мусора.
+ * Изменение: Удален мертвый код syncTopologyToBle (логика перенесена в BleCommandHandler).
  */
 
  #ifndef DB_MANAGER_H
@@ -27,13 +27,14 @@
      // --- ИДЕНТИФИКАЦИЯ (Локальный узел) ---
      uint8_t generateUniqueId();
      
-     // Передаем myNodeId и myMsgSeq по ссылке, чтобы они обновились в main.cpp
+     // Обработка коллизий с уведомлением Оператора
      void handleCollision(uint8_t& myNodeId, uint8_t& myMsgSeq, uint8_t myNodeType);
  
      // --- ТОПОЛОГИЯ И КАРТОГРАФИЯ (Глобальные задачи) ---
      void processBackgroundTasks(bool isFastTracker, uint8_t myNodeId);
      void updateGeodata(bool isFastTracker);
  
+     // --- УПРАВЛЕНИЕ БАЗОЙ ---
      void clearDatabase(uint8_t myNodeId);
  
  private:
@@ -44,7 +45,7 @@
      GpsManager& _gps;
      GeoPacker& _packer;
  
-     // Таймеры и флаги перенесены из глобальной области видимости main.cpp
+     // Системные таймеры
      uint32_t _lastTopologyUpdateTime;
      uint32_t _lastCleanupTime;
      

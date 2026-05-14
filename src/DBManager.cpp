@@ -1,9 +1,9 @@
 /**
  * Project: Naviga-Dongle
  * File: DBManager.cpp
- * Version: 1.43.8
- * Изменение: Асинхронная неблокирующая выгрузка базы (State Machine).
+ * Version: 1.43.9
  * Description: Реализация логики контроллера базы данных узлов.
+ * Изменение: Добавлена отправка EVT_IDENTITY при коллизии для защиты от State Desync.
  */
 
  #include "DBManager.h"
@@ -29,9 +29,11 @@
  
  void DBManager::handleCollision(uint8_t& myNodeId, uint8_t& myMsgSeq, uint8_t myNodeType) {
      uint8_t oldId = myNodeId;
+     
+     // Освобождаем старую ячейку (она сразу же будет занята "самозванцем" в RxManager)
      _db.removeNode(oldId);
  
-     // Генерируем новый уникальный ID и обновляем ссылку в main.cpp
+     // Получаем и занимаем новый ID
      myNodeId = generateUniqueId();
      _db.addNode(myNodeId);
  
@@ -42,19 +44,25 @@
      char myName[24]; 
      snprintf(myName, sizeof(myName), "Node-%d", myNodeId);
  
-     // Рассылаем новый ID по сети с наивысшим приоритетом
+     // 1. Уведомляем соседей по радиоэфиру с максимальным приоритетом
      _tx.sendNodeInfo(myName, myNodeType, TX_CRITICAL);
      _db.updateNodeInfo(myNodeId, myName, myNodeType);
  
-     // Сохраняем изменения в энергонезависимую память
+     // 2. Сохраняем новое состояние в энергонезависимую память (NVS)
      _settings.settings.nodeId = myNodeId;
      _settings.save();
      _settings.saveNodesSnapshot(_db);
+ 
+     // 3. БЕЗОПАСНОСТЬ: Мгновенно уведомляем Оператора (Смартфон) о смене ID.
+     // Это предотвращает ситуацию, когда Оператор принимает координаты "самозванца" за свои.
+     _ble.sendIdentity(myNodeId, myName, myNodeType);
+     LOG_INFO("BLE", "Notified App about forced ID change to %d", myNodeId);
  }
  
  void DBManager::processBackgroundTasks(bool isFastTracker, uint8_t myNodeId) {
      uint32_t currentMillis = millis();
  
+     // Синхронизация топологии (Расчет квадрантов для векторного фильтра)
      if (_gps.isValid() && (currentMillis - _lastTopologyUpdateTime > TOPOLOGY_UPDATE_INTERVAL_MS)) {
          if (isFastTracker) {
              LOG_INFO("SYS", "Topology sync skipped: Tracker is running.");
@@ -64,6 +72,7 @@
          _lastTopologyUpdateTime = currentMillis;
      }
  
+     // Сборщик мусора (удаление узлов, не выходивших на связь дольше таймаута)
      if (currentMillis - _lastCleanupTime > CLEANUP_INTERVAL_MS) {
          _db.cleanup(myNodeId);
          _lastCleanupTime = currentMillis;
@@ -73,6 +82,8 @@
  void DBManager::updateGeodata(bool isFastTracker) {
      if (_gps.isValid()) {
          float currentLat = _gps.getLat();
+         
+         // Обновление коэффициента сжатия сетки координат при смещении более 1 градуса
          if (!_isLonScaleSet || abs(currentLat - _lastScaleLat) > 1.0f) {
              _packer.updateLonScale(currentLat);
              _lastScaleLat = currentLat;
@@ -80,11 +91,13 @@
              LOG_INFO("SYS", "Longitude scale updated for Lat: %.4f", currentLat);
          }
  
+         // Если мы не "быстрый трекер", пересчитываем дистанции до соседей
          if (!isFastTracker) {
              for (int i = 1; i < 255; i++) {
                  const NodeRecord *node = _db.getNode(i);
                  if (node != nullptr && node->isActive) {
-                     // Распаковка свежих координат
+                     
+                     // Распаковка свежих сжатых координат, пришедших из радиоэфира
                      if (node->packedCoords != 0 && node->lat == 0.0f && node->lon == 0.0f) {
                          float unpLat, unpLon;
                          _packer.unpack(node->packedCoords, _gps.getLat(), _gps.getLon(), unpLat, unpLon);
