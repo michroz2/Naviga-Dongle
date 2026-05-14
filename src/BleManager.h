@@ -1,7 +1,7 @@
 /**
  * File: BleManager.h
- * Version: 1.41
- * Изменение: Добавлен метод sendNodeDelete для уведомления Оператора об удалении узла (v1.41).
+ * Version: 1.46.5
+ * Изменение: Добавлены методы дельта-обновлений sendNodeCoords и sendNodeInfoUpdate.
  * Description: Управление BLE-стеком (через библиотеку NimBLE) и реализация протокола Naviga (UC-04).
  */
 
@@ -21,16 +21,20 @@
      
      void process(); // Оставлен для совместимости (логика перенесена в main)
      BleStatus getBleStatus();
-
+ 
      // Методы отправки данных (NOTIFY) в смартфон
      void sendIdentity(uint8_t nodeId, const char* name, uint8_t role);
      void sendSysConfig(uint32_t txMoving, uint32_t txStill, uint32_t connTimeout, uint32_t activeTimeout);
      void sendNodeUpdate(const BleEvtNodeUpdate& nodeData);
-     void sendNodeDelete(uint8_t nodeId); // ИЗМЕНЕНИЕ 1.41
-     void sendMyStatus(uint8_t gpsValid, uint8_t satellites, uint8_t batteryPercent, uint16_t batteryVoltage); // ИЗМЕНЕНИЕ 1.34
+     void sendNodeDelete(uint8_t nodeId); 
+     
+     // НОВОЕ 1.46.5: Методы оптимизации трафика (Дельта-пакеты)
+     void sendNodeCoords(uint8_t id, float lat, float lon, float snr);
+     void sendNodeInfoUpdate(uint8_t id, uint8_t role, const char* name);
+ 
+     void sendMyStatus(uint8_t gpsValid, uint8_t satellites, uint8_t batteryPercent, uint16_t batteryVoltage);
  
      // --- Флаги и буферы ---
-     // Выставление флагов при приеме данных. Обработка флагов осуществляется в main.cpp
      bool hasNewIdentity;
      BleIdentity newIdentity;
      bool hasNewSysConfig;
@@ -40,10 +44,10 @@
      bool requestClearDB;
      bool requestIdentitySync;
      bool requestSysConfigSync;
-
+ 
      // Храним 4 символа аппаратного MAC-адреса для вывода на экран и в имя
      char macSuffix[5]; 
-
+ 
  private:
      NimBLEServer* pServer;                     // Указатель на BLE-сервер
      NimBLECharacteristic* pTxCharacteristic;   // Характеристика передачи (NOTIFY)
@@ -55,7 +59,7 @@
      class ServerCallbacks;
      class RxCallbacks;
  
-     // Дружественные классы для доступа к приватным переменным (особенно _isConnected и флагам)
+     // Дружественные классы для доступа к приватным переменным
      friend class ServerCallbacks;
      friend class RxCallbacks;
  };

@@ -1,9 +1,9 @@
 /**
+ * Project: Naviga-Dongle
  * File: BleProtocol.h
- * Version: 1.41
+ * Version: 1.46.5
  * Description: Описание структур данных для BLE GATT. 
- * Изменение: Добавлен OpCode EVT_NODE_DELETE (0x14) и структура BleEvtNodeDelete (v1.41).
- * Все структуры упакованы без выравнивания (pack 1) для обеспечения кроссплатформенности.
+ * Изменение: Добавлены структуры дельта-обновлений (0x15, 0x16) согласно Контракту 1.46.4.
  */
 
  #ifndef BLE_PROTOCOL_H
@@ -14,84 +14,87 @@
  #pragma pack(push, 1) // Отключение выравнивания памяти
  
  // ==========================================================
- // 1. КОДЫ ОПЕРАЦИЙ (OpCodes) - Первый байт каждого пакета
+ // 1. КОДЫ ОПЕРАЦИЙ (OpCodes)
  // ==========================================================
  enum BleOpCode : uint8_t {
-     // Оператор -> Донгл (Запись/Команды)
-     CMD_SET_IDENTITY    = 0x01, // Задать новые Имя и Роль
-     CMD_SET_SYS_CONFIG  = 0x02, // Задать системные тайминги и настройки
-     CMD_ACTION_RESET    = 0x03, // Hard Reset (Перезагрузка микроконтроллера)
-     CMD_ACTION_CLEAR_DB = 0x04, // Очистить базу соседей (Топологию)
-     
-     // Запросы от Оператора к Донглу (при подключении или синхронизации)
-     CMD_REQ_FULL_SYNC   = 0x05, // Запросить всю базу соседей целиком
-     CMD_REQ_IDENTITY    = 0x06, // Запросить текущие Имя и Роль Донгла
-     CMD_REQ_SYS_CONFIG  = 0x07, // Запросить текущие настройки Донгла
+     CMD_SET_IDENTITY    = 0x01,
+     CMD_SET_SYS_CONFIG  = 0x02,
+     CMD_ACTION_RESET    = 0x03,
+     CMD_ACTION_CLEAR_DB = 0x04,
+     CMD_REQ_FULL_SYNC   = 0x05,
+     CMD_REQ_IDENTITY    = 0x06,
+     CMD_REQ_SYS_CONFIG  = 0x07,
  
-     // Донгл -> Оператор (Уведомления)
-     EVT_MY_STATUS       = 0x10, // Телеметрия (GPS, Батарея)
-     EVT_NODE_UPDATE     = 0x11, // Обновление гео-данных по одному соседу
-     EVT_IDENTITY        = 0x12, // Ответ на запрос: Мои текущие Имя и Роль
-     EVT_SYS_CONFIG      = 0x13, // Ответ на запрос: Мои текущие настройки
-     EVT_NODE_DELETE     = 0x14  // ИЗМЕНЕНИЕ 1.41: Уведомление об удалении узла
+     EVT_MY_STATUS       = 0x10,
+     EVT_NODE_UPDATE     = 0x11, // Полный пакет (для Full Sync)
+     EVT_IDENTITY        = 0x12,
+     EVT_SYS_CONFIG      = 0x13,
+     EVT_NODE_DELETE     = 0x14,
+     EVT_NODE_COORDS     = 0x15, // НОВОЕ: Дельта-координаты
+     EVT_NODE_INFO       = 0x16  // НОВОЕ: Дельта-инфо (Имя/Роль)
  };
  
  // ==========================================================
- // 2. ИДЕНТИФИКАТОР УЗЛА (Identity)
+ // 2. СТРУКТУРЫ ДАННЫХ
  // ==========================================================
  
- // Пакет от Оператора (CMD_SET_IDENTITY) или ответ от Донгла (EVT_IDENTITY)
  struct BleIdentity {
-     uint8_t opCode;             // CMD_SET_IDENTITY или EVT_IDENTITY
-     uint8_t myNodeId;           // ID узла (изменяет Донгл при коллизиях, оператор обычно не трогает)
-     char myName[24];            // ИЗМЕНЕНИЕ 1.38: Имя узла (24 байта)
-     uint8_t myRole;             // 0-Relay, 1-Stalker, 2-Tracker
+     uint8_t opCode;
+     uint8_t myNodeId;
+     char myName[24];
+     uint8_t myRole;
  };
  
- // ==========================================================
- // 3. СИСТЕМНЫЕ НАСТРОЙКИ (SysConfig)
- // ==========================================================
- 
- // Пакет от Оператора (CMD_SET_SYS_CONFIG) или ответ от Донгла (EVT_SYS_CONFIG)
  struct BleSysConfig {
-     uint8_t opCode;                 // CMD_SET_SYS_CONFIG или EVT_SYS_CONFIG
-     uint32_t txIntervalMoving;      // Интервал отправки координат в движении (мс)
-     uint32_t txIntervalStill;       // Интервал отправки Heartbeat на стоянке (мс)
-     uint32_t nodeConnectionTimeout; // Таймаут потери связи (мс) - влияет на UI (серое отображение)
-     uint32_t nodeActiveTimeoutMs;   // Таймаут очистки из базы (мс) - физическое удаление сборщиком мусора
+     uint8_t opCode;
+     uint32_t txIntervalMoving;
+     uint32_t txIntervalStill;
+     uint32_t nodeConnectionTimeout;
+     uint32_t nodeActiveTimeoutMs;
  };
  
- // ==========================================================
- // 4. ТЕЛЕМЕТРИЯ И ТОПОЛОГИЯ 
- // ==========================================================
- 
- // Периодическая рассылка телеметрии самого донгла
  struct BleEvtMyStatus {
-     uint8_t opCode;             // EVT_MY_STATUS (0x10)
-     uint8_t gpsValid;           // 1 - Фикс есть, 0 - нет
-     uint8_t satellites;         // Количество видимых спутников
-     uint8_t batteryPercent;     // Заряд батареи (0-100%)
-     uint16_t batteryVoltage;    // Напряжение батареи в милливольтах (мВ)
+     uint8_t opCode;
+     uint8_t gpsValid;
+     uint8_t satellites;
+     uint8_t batteryPercent;
+     uint16_t batteryVoltage;
  };
  
- // Обновление информации о конкретном соседе (отправляется по запросу или при приеме пакета из эфира)
+ // Полный пакет обновления (43 байта) - используется только для Full Sync
  struct BleEvtNodeUpdate {
-     uint8_t opCode;             // EVT_NODE_UPDATE (0x11)
-     uint8_t nodeId;             // Идентификатор соседа
-     uint8_t nodeRole;           // Роль соседа
-     char nodeName[24];          // ИЗМЕНЕНИЕ 1.38: Имя соседа (24 байта)
-     float lat;                  // Широта
-     float lon;                  // Долгота
-     float snr;                  // Качество сигнала (SNR)
-     uint32_t lastSeenAge;       // Сколько миллисекунд назад узел был на связи (Возраст)
+     uint8_t opCode;
+     uint8_t nodeId;
+     uint8_t nodeRole;
+     char nodeName[24];
+     float lat;
+     float lon;
+     float snr;
+     uint32_t lastSeenAge;
  };
  
- // ИЗМЕНЕНИЕ 1.41: Структура уведомления об удалении узла
  struct BleEvtNodeDelete {
-     uint8_t opCode;             // EVT_NODE_DELETE (0x14)
-     uint8_t nodeId;             // ID удаляемого узла
+     uint8_t opCode;
+     uint8_t nodeId;
  };
  
- #pragma pack(pop) // Возвращаем выравнивание памяти по умолчанию
+ // НОВОЕ 1.46.5: Дельта-координаты (14 байт)
+ struct BleEvtNodeCoords {
+     uint8_t opCode;  // 0x15
+     uint8_t nodeId;
+     float lat;
+     float lon;
+     float snr;
+ };
+ 
+ // НОВОЕ 1.46.5: Дельта-инфо (27 байт)
+ struct BleEvtNodeInfo {
+     uint8_t opCode;  // 0x16
+     uint8_t nodeId;
+     uint8_t nodeRole;
+     char nodeName[24];
+ };
+ 
+ #pragma pack(pop)
  
  #endif // BLE_PROTOCOL_H
