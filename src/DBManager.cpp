@@ -1,7 +1,8 @@
 /**
  * Project: Naviga-Dongle
  * File: DBManager.cpp
- * Version: 1.43.6
+ * Version: 1.43.8
+ * Изменение: Асинхронная неблокирующая выгрузка базы (State Machine).
  * Description: Реализация логики контроллера базы данных узлов.
  */
 
@@ -100,28 +101,6 @@
              }
          }
      }
- }
- 
- void DBManager::syncTopologyToBle() {
-     for (int i = 1; i < 255; i++) {
-         const NodeRecord *node = _db.getNode(i);
-         if (node != nullptr && node->isActive) {
-             BleEvtNodeUpdate update;
-             update.opCode = EVT_NODE_UPDATE;
-             update.nodeId = node->nodeId;
-             update.nodeRole = node->type;
-             strncpy(update.nodeName, node->nodeName, sizeof(update.nodeName) - 1);
-             update.nodeName[sizeof(update.nodeName) - 1] = '\0';
-             update.lat = node->lat;
-             update.lon = node->lon;
-             update.snr = node->snr;
-             update.lastSeenAge = millis() - node->lastSeen;
- 
-             _ble.sendNodeUpdate(update);
-             delay(5); // Небольшая задержка, чтобы не переполнить буфер BLE
-         }
-     }
-     LOG_INFO("BLE", "Full topology sync sent to Smartphone");
  }
  
  void DBManager::clearDatabase(uint8_t myNodeId) {

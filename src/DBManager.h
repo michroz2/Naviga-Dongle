@@ -1,7 +1,8 @@
 /**
  * Project: Naviga-Dongle
  * File: DBManager.h
- * Version: 1.43.6
+ * Version: 1.43.8
+ * Изменение: Асинхронная неблокирующая выгрузка базы (State Machine).
  * Description: Контроллер базы данных. Управляет идентификацией локального узла,
  * топологией сети, очисткой мусора и синхронизацией с мобильным приложением.
  */
@@ -33,8 +34,6 @@
      void processBackgroundTasks(bool isFastTracker, uint8_t myNodeId);
      void updateGeodata(bool isFastTracker);
  
-     // --- СИНХРОНИЗАЦИЯ ПО BLE (Оператор) ---
-     void syncTopologyToBle();
      void clearDatabase(uint8_t myNodeId);
  
  private:

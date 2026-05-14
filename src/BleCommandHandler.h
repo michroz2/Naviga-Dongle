@@ -1,9 +1,10 @@
 /**
  * Project: Naviga-Dongle
  * File: BleCommandHandler.h
- * Version: 1.43.7
+ * Version: 1.43.8
  * Description: Диспетчер команд Bluetooth. Читает флаги от BleManager 
  * и раздает команды другим подсистемам (DB, Tx, Settings).
+ * Изменение: Добавлен State Machine для асинхронной выгрузки топологии.
  */
 
  #ifndef BLE_COMMAND_HANDLER_H
@@ -33,11 +34,12 @@
      TxManager& _tx;
      NodeDatabase& _nodeDB;
      
-     // myNodeId передается как const, так как Оператор не имеет права его менять!
      const uint8_t& _myNodeId;
-     
-     // myNodeType можно менять (например, переключить со Stalker на Tracker)
      uint8_t& _myNodeType;
+ 
+     // Переменная состояния для асинхронной выгрузки базы по Bluetooth
+     // 0 - выгрузка не идет. 1..254 - ID узла, с которого нужно продолжить проверку.
+     uint8_t _syncBookmark; 
  };
  
  #endif // BLE_COMMAND_HANDLER_H
