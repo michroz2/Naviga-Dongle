@@ -1,7 +1,7 @@
 /**
  * File: BleManager.h
- * Version: 1.46.5
- * Изменение: Добавлены методы дельта-обновлений sendNodeCoords и sendNodeInfoUpdate.
+ * Version: 1.46.7
+ * Изменение: Добавлены RAM-переменные для приема опорных координат по команде 0x08.
  * Description: Управление BLE-стеком (через библиотеку NimBLE) и реализация протокола Naviga (UC-04).
  */
 
@@ -28,7 +28,7 @@
      void sendNodeUpdate(const BleEvtNodeUpdate& nodeData);
      void sendNodeDelete(uint8_t nodeId); 
      
-     // НОВОЕ 1.46.5: Методы оптимизации трафика (Дельта-пакеты)
+     // Методы оптимизации трафика (Дельта-пакеты)
      void sendNodeCoords(uint8_t id, float lat, float lon, float snr);
      void sendNodeInfoUpdate(uint8_t id, uint8_t role, const char* name);
  
@@ -44,6 +44,11 @@
      bool requestClearDB;
      bool requestIdentitySync;
      bool requestSysConfigSync;
+     
+     // НОВОЕ 1.46.7: Буферы для опорной точки
+     bool hasNewAnchor;
+     float newAnchorLat;
+     float newAnchorLon;
  
      // Храним 4 символа аппаратного MAC-адреса для вывода на экран и в имя
      char macSuffix[5]; 

@@ -1,9 +1,9 @@
 /**
  * Project: Naviga-Dongle
  * File: BleCommandHandler.cpp
- * Version: 1.46.6
+ * Version: 1.46.7
  * Description: Реализация диспетчера команд Bluetooth.
- * Изменение: Асинхронная выгрузка базы: добавлен Rate-Limiting (20мс) и включен сам Донгл в выгрузку.
+ * Изменение: Добавлена обработка флага _ble.hasNewAnchor для вызова _db.setAnchor.
  */
 
  #include "BleCommandHandler.h"
@@ -14,8 +14,8 @@
      : _ble(ble), _db(db), _settings(settings), _tx(tx), _nodeDB(nodeDB), 
        _myNodeId(myNodeId), _myNodeType(myNodeType) 
  {
-     _syncBookmark = 0; // Изначально автомат выгрузки выключен
-     _lastSyncSendTime = 0; // Инициализация таймера задержки
+     _syncBookmark = 0; 
+     _lastSyncSendTime = 0; 
  }
  
  void BleCommandHandler::process() {
@@ -41,7 +41,7 @@
      // 3. Запрос на выгрузку всей топологии сети (СТАРТ АВТОМАТА)
      if (_ble.requestFullSync) {
          _ble.requestFullSync = false;
-         _syncBookmark = 1; // Устанавливаем закладку на начало базы
+         _syncBookmark = 1; 
          LOG_INFO("BLE", "Started Async Full Topology Sync...");
      }
  
@@ -88,29 +88,28 @@
          ESP.restart();
      }
  
+     // НОВОЕ 1.46.7: Прием и обработка опорной точки от смартфона
+     if (_ble.hasNewAnchor) {
+         _ble.hasNewAnchor = false;
+         _db.setAnchor(_ble.newAnchorLat, _ble.newAnchorLon);
+         LOG_INFO("BLE", "Anchor coordinates processed via App: Lat=%.6f, Lon=%.6f", _ble.newAnchorLat, _ble.newAnchorLon);
+     }
+ 
      // ====================================================================
      // 8. АСИНХРОННЫЙ АВТОМАТ ВЫГРУЗКИ БАЗЫ (State Machine)
-     // Размещен в конце, чтобы гарантированно отработать после других команд
      // ====================================================================
      if (_syncBookmark > 0) {
          
-         // НОВОЕ 1.46.6: Rate-Limiting. Если с момента последней отправки
-         // прошло менее 20 мс, возвращаем управление в основной цикл ESP32.
          if (millis() - _lastSyncSendTime < BLE_SYNC_PACKET_DELAY_MS) {
              return; 
          }
          
-         // Сканируем базу, начиная с закладки
          while (_syncBookmark < 255) {
              uint8_t idToCheck = _syncBookmark;
-             _syncBookmark++; // Сразу сдвигаем закладку для следующей итерации/цикла
- 
-             // ИЗМЕНЕНИЕ 1.46.6: Фильтр пропуска собственного узла удален.
-             // Теперь при Full Sync мы выгружаем Оператору и свои полные данные (вкл. координаты).
+             _syncBookmark++; 
  
              const NodeRecord *node = _nodeDB.getNode(idToCheck);
              if (node != nullptr && node->isActive) {
-                 // Нашли активный узел (в том числе свой). Собираем и отправляем пакет.
                  BleEvtNodeUpdate update;
                  update.opCode = EVT_NODE_UPDATE;
                  update.nodeId = node->nodeId;
@@ -123,18 +122,12 @@
                  update.lastSeenAge = millis() - node->lastSeen;
  
                  _ble.sendNodeUpdate(update);
-                 
-                 // Обновляем таймер после успешной выгрузки пакета в буфер BLE
                  _lastSyncSendTime = millis();
-                 
-                 // ВАЖНО: Прерываем выполнение функции. 
-                 // Отправлена ровно 1 запись, процессор возвращается в loop().
                  return; 
              }
          }
  
-         // Если цикл while завершился (закладка дошла до 255 и никого больше нет)
-         _syncBookmark = 0; // Выключаем автомат
+         _syncBookmark = 0; 
          LOG_INFO("BLE", "Async Full Topology Sync Completed!");
      }
  }

@@ -1,13 +1,12 @@
 /**
  * File: PacketManager.cpp
- * Version: 1.41
- * Изменение: В handleLeavePacket добавлен вызов bleManager.sendNodeDelete (v1.41).
+ * Version: 1.46.7
+ * Изменение: Проверка _gps.hasAnchor() вместо абсолютного фикса спутников при разборе MSG_COORDS.
  * Description: Реализация диспетчера пакетов. Распаковывает Payload и обновляет базу данных.
  */
  #include "PacketManager.h"
  #include "logger.h"
  
- // ИЗМЕНЕНИЕ 1.41: Инициализация со ссылкой на BleManager
  PacketManager::PacketManager(NodeDatabase& db, GpsManager& gps, GeoPacker& packer, BleManager& ble)
      : _nodeDB(db), _gps(gps), _packer(packer), _ble(ble), _lastTargetId(0) {
  } 
@@ -24,8 +23,9 @@
      uint32_t packedCoords;
      memcpy(&packedCoords, payload, sizeof(PayloadCoords));
  
-     if (!_gps.isValid()) {
-         LOG_WARN("DISPATCH", "No GPS fix. Saved RAW coords for Node %d", senderId);
+     // ИЗМЕНЕНИЕ 1.46.7: Распаковываем данные, если есть пространственная RAM-опора
+     if (!_gps.hasAnchor()) {
+         LOG_WARN("DISPATCH", "No GPS anchor available. Saved RAW coords for Node %d", senderId);
          _nodeDB.updateNodeCoords(senderId, 0.0f, 0.0f, packedCoords);
          _lastTargetId = senderId; 
          return;
@@ -61,7 +61,6 @@
      
      _nodeDB.removeNode(senderId); 
      
-     // ИЗМЕНЕНИЕ 1.41: Явное уведомление приложения Оператора об удалении узла
      _ble.sendNodeDelete(senderId);
      
      LOG_INFO("DISPATCH", "Node %d left the network. Reason code: %d", senderId, info.reason);
@@ -85,4 +84,4 @@
          default:
              break;
      } 
- } //PacketManager.cpp
+ }

@@ -1,6 +1,7 @@
 /**
  * File: GpsManager.h
- * Version: 1.19 Изменение: Поддержка статических координат для работы Ретранслятора без GPS (Шаг 2).
+ * Version: 1.46.7
+ * Изменение: Разделение понятий спутникового фикса (hasFix) и наличия опорной RAM-точки (hasAnchor).
  * Description: Изолированный класс для управления GPS-модулем.
  */
  #ifndef GPS_MANAGER_H
@@ -10,7 +11,6 @@
  #include <TinyGPS++.h>
  #include "configuration.h"
  
- // Определяем типы коллбэков для связи с внешним миром (UI и Питание)
  typedef void (*GpsStatusCallback)(String, String, String, String);
  typedef void (*GpsPowerCycleCallback)();
  
@@ -18,34 +18,33 @@
  public:
      GpsManager();
  
-     // Инициализация с передачей функций для вывода на экран и сброса питания
      void init(GpsStatusCallback statusCb, GpsPowerCycleCallback powerCb);
-     
-     // Обновление данных (должно вызываться в loop)
      void update();
  
-     // Установка статических координат (для режима Ретранслятора)
-     void setStaticLocation(float lat, float lon);
+     // НОВОЕ 1.46.7: Явная установка опорной точки (через BLE или дефолты)
+     void setAnchorLocation(float lat, float lon);
  
-     // Простые геттеры для получения данных (БЕЗ const, так как TinyGPS++ методы не константные)
-     bool isValid();
-     float getLat();
-     float getLon();
+     // НОВОЕ 1.46.7: Разделенные геттеры состояний
+     bool hasFix();    // Есть ли честный спутниковый фикс прямо сейчас
+     bool hasAnchor(); // Доступна ли хоть какая-то привязка для GeoPacker
+ 
+     bool isValid();   // Оставлен для обратной совместимости, эквивалентен hasAnchor
+     float getLat();   // Выдает GPS Lat, если есть фикс, иначе _anchorLat
+     float getLon();   // Выдает GPS Lon, если есть фикс, иначе _anchorLon
+     
      uint32_t getSatellites();
-     float getSpeed();           //Получение аппаратной скорости (Доплер)
+     float getSpeed(); 
  
-     // Вспомогательные функции для математики (геометрия)
      float distanceTo(float lat, float lon);
      float courseTo(float lat, float lon);
      
  private:
-     HardwareSerial gpsSerial; // Аппаратный UART для общения с модулем
-     TinyGPSPlus tinyGps;      // Парсер NMEA
+     HardwareSerial gpsSerial; 
+     TinyGPSPlus tinyGps;      
  
-     float _staticLat = 0.0f;
-     float _staticLon = 0.0f;
+     float _anchorLat = 0.0f;
+     float _anchorLon = 0.0f;
  
-     // Внутренний метод проверки наличия потока NMEA
      bool checkNMEA(uint32_t baud);
  };
  

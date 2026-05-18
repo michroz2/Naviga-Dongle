@@ -1,9 +1,9 @@
 /**
  * Project: Naviga-Dongle
  * File: BleProtocol.h
- * Version: 1.46.5
+ * Version: 1.46.7
  * Description: Описание структур данных для BLE GATT. 
- * Изменение: Добавлены структуры дельта-обновлений (0x15, 0x16) согласно Контракту 1.46.4.
+ * Изменение: Добавлена команда CMD_SET_ANCHOR_COORDS (0x08) для инициализации без GPS.
  */
 
  #ifndef BLE_PROTOCOL_H
@@ -24,14 +24,15 @@
      CMD_REQ_FULL_SYNC   = 0x05,
      CMD_REQ_IDENTITY    = 0x06,
      CMD_REQ_SYS_CONFIG  = 0x07,
+     CMD_SET_ANCHOR_COORDS = 0x08, // НОВОЕ 1.46.7: Установка опорной точки с телефона
  
      EVT_MY_STATUS       = 0x10,
      EVT_NODE_UPDATE     = 0x11, // Полный пакет (для Full Sync)
      EVT_IDENTITY        = 0x12,
      EVT_SYS_CONFIG      = 0x13,
      EVT_NODE_DELETE     = 0x14,
-     EVT_NODE_COORDS     = 0x15, // НОВОЕ: Дельта-координаты
-     EVT_NODE_INFO       = 0x16  // НОВОЕ: Дельта-инфо (Имя/Роль)
+     EVT_NODE_COORDS     = 0x15, // Дельта-координаты
+     EVT_NODE_INFO       = 0x16  // Дельта-инфо (Имя/Роль)
  };
  
  // ==========================================================
@@ -78,7 +79,7 @@
      uint8_t nodeId;
  };
  
- // НОВОЕ 1.46.5: Дельта-координаты (14 байт)
+ // Дельта-координаты (14 байт)
  struct BleEvtNodeCoords {
      uint8_t opCode;  // 0x15
      uint8_t nodeId;
@@ -87,12 +88,19 @@
      float snr;
  };
  
- // НОВОЕ 1.46.5: Дельта-инфо (27 байт)
+ // Дельта-инфо (27 байт)
  struct BleEvtNodeInfo {
      uint8_t opCode;  // 0x16
      uint8_t nodeId;
      uint8_t nodeRole;
      char nodeName[24];
+ };
+ 
+ // НОВОЕ 1.46.7: Опорные координаты от смартфона (9 байт)
+ struct BleCmdAnchorCoords {
+     uint8_t opCode; // 0x08
+     float lat;
+     float lon;
  };
  
  #pragma pack(pop)

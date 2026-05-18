@@ -1,10 +1,10 @@
 /**
  * Project: Naviga-Dongle
  * File: DBManager.h
- * Version: 1.43.9
+ * Version: 1.46.7
  * Description: Контроллер базы данных. Управляет идентификацией локального узла,
  * топологией сети и очисткой мусора.
- * Изменение: Удален мертвый код syncTopologyToBle (логика перенесена в BleCommandHandler).
+ * Изменение: Добавлен метод setAnchor для проброса координат Оператора в GpsManager.
  */
 
  #ifndef DB_MANAGER_H
@@ -36,6 +36,9 @@
  
      // --- УПРАВЛЕНИЕ БАЗОЙ ---
      void clearDatabase(uint8_t myNodeId);
+     
+     // НОВОЕ 1.46.7: Шлюз для проброса опорной точки в GpsManager
+     void setAnchor(float lat, float lon);
  
  private:
      NodeDatabase& _db;
