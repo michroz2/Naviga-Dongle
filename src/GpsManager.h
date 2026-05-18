@@ -1,7 +1,7 @@
 /**
  * File: GpsManager.h
- * Version: 1.46.7
- * Изменение: Разделение понятий спутникового фикса (hasFix) и наличия опорной RAM-точки (hasAnchor).
+ * Version: 1.47.0
+ * Изменение: Добавлен флаг физического присутствия GPS-модуля и поддержка NVS для стационарных Реле.
  * Description: Изолированный класс для управления GPS-модулем.
  */
  #ifndef GPS_MANAGER_H
@@ -21,12 +21,15 @@
      void init(GpsStatusCallback statusCb, GpsPowerCycleCallback powerCb);
      void update();
  
-     // НОВОЕ 1.46.7: Явная установка опорной точки (через BLE или дефолты)
+     // Явная установка опорной точки (через BLE или дефолты)
      void setAnchorLocation(float lat, float lon);
  
-     // НОВОЕ 1.46.7: Разделенные геттеры состояний
+     // Разделенные геттеры состояний
      bool hasFix();    // Есть ли честный спутниковый фикс прямо сейчас
      bool hasAnchor(); // Доступна ли хоть какая-то привязка для GeoPacker
+     
+     // НОВОЕ 1.47.0: Проверка, обнаружен ли GPS-модуль физически при старте
+     bool isHardwarePresent(); 
  
      bool isValid();   // Оставлен для обратной совместимости, эквивалентен hasAnchor
      float getLat();   // Выдает GPS Lat, если есть фикс, иначе _anchorLat
@@ -44,6 +47,9 @@
  
      float _anchorLat = 0.0f;
      float _anchorLon = 0.0f;
+ 
+     // НОВОЕ 1.47.0: Флаг физического наличия чипа GPS на плате
+     bool _gpsHardwarePresent = false; 
  
      bool checkNMEA(uint32_t baud);
  };

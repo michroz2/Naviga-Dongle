@@ -1,8 +1,8 @@
 /**
  * Project: Naviga-Dongle (T-Beam v1.1 / T-Energy S3 + Custom E22 + GPS)
  * File: main.cpp
- * Version: 1.46.7
- * Изменение: Обновление вызовов GpsManager согласно разделению на hasFix() и hasAnchor().
+ * Version: 1.47.0
+ * Изменение: Интеграция автоматической загрузки NVS-координат при старте.
  * Description: Главный файл оркестратора.
  */
 
@@ -157,7 +157,6 @@
  
  void sendTelemetry() {
     if (bleManager.getBleStatus() == BLE_CONNECTED) {
-       // ИЗМЕНЕНИЕ 1.46.7: В телеметрию отдаем строго состояние спутникового фикса
        uint8_t gpsValid = gps.hasFix() ? 1 : 0;
        uint8_t satellites = (uint8_t)gps.getSatellites();
        uint8_t battPct = power.getBatteryPercent();
@@ -183,7 +182,6 @@
  
     BleStatus currentBleStatus = bleManager.getBleStatus();
  
-    // ИЗМЕНЕНИЕ 1.46.7: Экран отображает статус реального фикса (OK/Wait/ERR)
     display.updateMainScreen(bleManager.macSuffix, gps.hasFix(), sats, myNodeId,
                              myMsgSeq, nodeDB.getActiveNodesCount(),
                              isTargetValid, currentTargetId, targetDist,
@@ -231,11 +229,22 @@
     nodeDB.addNode(myNodeId);
     nodeDB.updateNodeInfo(myNodeId, myName, myNodeType);
  
-    // ИЗМЕНЕНИЕ 1.46.7: Инициализация дефолтной опорной точки (STATIC_LAT/STATIC_LON) из RAM
-    gps.setAnchorLocation(RELAY_STATIC_LAT, RELAY_STATIC_LON);
+    // ИЗМЕНЕНИЕ 1.47.0: Логика загрузки пространственной опоры для без-GPS устройств
+    float savedLat = 0.0f;
+    float savedLon = 0.0f;
+     
+    if (!gps.isHardwarePresent() && settingsManager.loadStaticCoordinates(savedLat, savedLon)) {
+        // Если GPS платы нет и в NVS сохранены валидные старые координаты, восстанавливаем их
+        gps.setAnchorLocation(savedLat, savedLon);
+        packer.updateLonScale(savedLat); 
+        LOG_INFO("SYS", "Restored permanent geometric anchor from NVS for blind Node.");
+    } else {
+        // Иначе падаем на стандартные жесткие дефолты из конфигурации
+        gps.setAnchorLocation(RELAY_STATIC_LAT, RELAY_STATIC_LON);
+    }
  
     display.showStatus("System Init...", "GPS Init Done", "Init LoRa...", "");
-    
+     
     if (!radio.init(setFlag)) {
        display.showStatus("ERROR", "LoRa Init Failed", "Check Logs", "");
        delay(3000);

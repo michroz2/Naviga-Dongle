@@ -1,7 +1,7 @@
 /**
  * File: GpsManager.cpp
- * Version: 1.46.7
- * Изменение: Авто-запись фикса в RAM-опору и разделение логики hasFix() / hasAnchor().
+ * Version: 1.47.0
+ * Изменение: Фиксация флага _gpsHardwarePresent при инициализации.
  * Description: Реализация класса управления GPS.
  */
  #include "GpsManager.h"
@@ -12,7 +12,7 @@
  
  const uint8_t UBX_FACTORY_RESET[] = { 0xB5, 0x62, 0x06, 0x09, 0x0D, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0x03, 0x1B, 0x9A };
  
- GpsManager::GpsManager() : gpsSerial(1) {}
+ GpsManager::GpsManager() : gpsSerial(1), _gpsHardwarePresent(false) {}
  
  bool GpsManager::checkNMEA(uint32_t baud) {
      gpsSerial.end(); 
@@ -44,6 +44,8 @@
      }
      
      if (nmeaFound) {
+         _gpsHardwarePresent = true; // НОВОЕ 1.47.0: Модуль ответил в одном из режимов
+         LOG_INFO("GPS", "Hardware module detected active at baud %d", activeBaud);
          if (activeBaud == 9600) return; 
          else {
              if (statusCb) statusCb("Init GPS...", "Switching Baud", String(activeBaud) + " -> 9600", "");
@@ -66,21 +68,25 @@
          
          if (powerCb) powerCb(); 
          
-         if (checkNMEA(115200)) { gpsSerial.print("$PUBX,41,1,0007,0003,9600,0*10\r\n"); gpsSerial.flush(); delay(500); } 
-         else if (checkNMEA(9600)) { } 
+         if (checkNMEA(115200)) { gpsSerial.print("$PUBX,41,1,0007,0003,9600,0*10\r\n"); gpsSerial.flush(); delay(500); _gpsHardwarePresent = true; } 
+         else if (checkNMEA(9600)) { _gpsHardwarePresent = true; } 
          
          gpsSerial.end(); 
          gpsSerial.begin(9600, SERIAL_8N1, GPS_RX, GPS_TX); 
      }
+ 
+     if (!_gpsHardwarePresent) {
+         LOG_WARN("GPS", "No GPS hardware detected. Running in STATIC/BLIND mode.");
+     }
  }
  
  void GpsManager::update() {
+     if (!_gpsHardwarePresent) return; // Нет смысла дергать serial, если модуля нет
+ 
      while (gpsSerial.available() > 0) {
          tinyGps.encode(gpsSerial.read()); 
      }
      
-     // ИЗМЕНЕНИЕ 1.46.7: Если есть свежий спутниковый фикс, автоматически
-     // перезаписываем опорную RAM-точку актуальными координатами.
      if (tinyGps.location.isValid() && tinyGps.location.isUpdated()) {
          _anchorLat = tinyGps.location.lat();
          _anchorLon = tinyGps.location.lng();
@@ -105,9 +111,13 @@
      return false;
  }
  
+ bool GpsManager::isHardwarePresent() {
+     return _gpsHardwarePresent;
+ }
+ 
  bool GpsManager::isValid() { 
      return hasAnchor(); 
- }
+ } 
  
  float GpsManager::getLat() { 
      if (tinyGps.location.isValid()) return tinyGps.location.lat();
@@ -122,6 +132,7 @@
  uint32_t GpsManager::getSatellites() { return tinyGps.satellites.value(); }
  
  float GpsManager::getSpeed() {
+     if (!_gpsHardwarePresent) return 0.0f;
      if (!tinyGps.location.isValid() && (_anchorLat != 0.0f || _anchorLon != 0.0f)) return 0.0f;
      return tinyGps.speed.kmph();
  } 
