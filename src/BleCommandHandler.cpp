@@ -1,9 +1,9 @@
 /**
  * Project: Naviga-Dongle
  * File: BleCommandHandler.cpp
- * Version: 1.43.8
+ * Version: 1.46.6
  * Description: Реализация диспетчера команд Bluetooth.
- * Изменение: Асинхронная неблокирующая выгрузка базы (State Machine).
+ * Изменение: Асинхронная выгрузка базы: добавлен Rate-Limiting (20мс) и включен сам Донгл в выгрузку.
  */
 
  #include "BleCommandHandler.h"
@@ -15,6 +15,7 @@
        _myNodeId(myNodeId), _myNodeType(myNodeType) 
  {
      _syncBookmark = 0; // Изначально автомат выгрузки выключен
+     _lastSyncSendTime = 0; // Инициализация таймера задержки
  }
  
  void BleCommandHandler::process() {
@@ -92,17 +93,24 @@
      // Размещен в конце, чтобы гарантированно отработать после других команд
      // ====================================================================
      if (_syncBookmark > 0) {
+         
+         // НОВОЕ 1.46.6: Rate-Limiting. Если с момента последней отправки
+         // прошло менее 20 мс, возвращаем управление в основной цикл ESP32.
+         if (millis() - _lastSyncSendTime < BLE_SYNC_PACKET_DELAY_MS) {
+             return; 
+         }
+         
          // Сканируем базу, начиная с закладки
          while (_syncBookmark < 255) {
              uint8_t idToCheck = _syncBookmark;
              _syncBookmark++; // Сразу сдвигаем закладку для следующей итерации/цикла
  
-             // Пропускаем собственный узел
-             if (idToCheck == _myNodeId) continue;
+             // ИЗМЕНЕНИЕ 1.46.6: Фильтр пропуска собственного узла удален.
+             // Теперь при Full Sync мы выгружаем Оператору и свои полные данные (вкл. координаты).
  
              const NodeRecord *node = _nodeDB.getNode(idToCheck);
              if (node != nullptr && node->isActive) {
-                 // Нашли активный узел. Собираем и отправляем пакет.
+                 // Нашли активный узел (в том числе свой). Собираем и отправляем пакет.
                  BleEvtNodeUpdate update;
                  update.opCode = EVT_NODE_UPDATE;
                  update.nodeId = node->nodeId;
@@ -116,6 +124,9 @@
  
                  _ble.sendNodeUpdate(update);
                  
+                 // Обновляем таймер после успешной выгрузки пакета в буфер BLE
+                 _lastSyncSendTime = millis();
+                 
                  // ВАЖНО: Прерываем выполнение функции. 
                  // Отправлена ровно 1 запись, процессор возвращается в loop().
                  return; 
@@ -126,4 +137,4 @@
          _syncBookmark = 0; // Выключаем автомат
          LOG_INFO("BLE", "Async Full Topology Sync Completed!");
      }
- } //BleCommandHandler.cpp
+ }
