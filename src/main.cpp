@@ -1,8 +1,8 @@
 /**
  * Project: Naviga-Dongle (T-Beam v1.1 / T-Energy S3 + Custom E22 + GPS)
  * File: main.cpp
- * Version: 1.47.1
- * Изменение: Формирование статуса gpsState для отправки в телеметрии BLE.
+ * Version: 1.47.2
+ * Изменение: Обновлен вызов updateGeodata с передачей myNodeId.
  * Description: Главный файл оркестратора.
  */
 
@@ -155,15 +155,14 @@
     }
  }
  
- // ИЗМЕНЕНИЕ 1.47.1: Формирование статуса gpsState
  void sendTelemetry() {
     if (bleManager.getBleStatus() == BLE_CONNECTED) {
        
-       uint8_t gpsState = GPS_STATE_SEARCHING; // 0
+       uint8_t gpsState = GPS_STATE_SEARCHING; 
        if (!gps.isHardwarePresent()) {
-           gpsState = GPS_STATE_NO_HW; // 2
+           gpsState = GPS_STATE_NO_HW; 
        } else if (gps.hasFix()) {
-           gpsState = GPS_STATE_FIX_OK; // 1
+           gpsState = GPS_STATE_FIX_OK; 
        }
        
        uint8_t satellites = (uint8_t)gps.getSatellites();
@@ -302,7 +301,8 @@
     if (currentMillis - lastGpsLogTime >= gpsUpdateInterval) {
        lastGpsLogTime = currentMillis;
        display.toggleLed();
-       dbManager.updateGeodata(isFastTracker);
+       // ИЗМЕНЕНИЕ 1.47.2: Передаем myNodeId
+       dbManager.updateGeodata(isFastTracker, myNodeId);
        updateDisplay();
     }
  }
