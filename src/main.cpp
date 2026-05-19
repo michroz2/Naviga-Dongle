@@ -1,8 +1,8 @@
 /**
  * Project: Naviga-Dongle (T-Beam v1.1 / T-Energy S3 + Custom E22 + GPS)
  * File: main.cpp
- * Version: 1.47.0
- * Изменение: Интеграция автоматической загрузки NVS-координат при старте.
+ * Version: 1.47.1
+ * Изменение: Формирование статуса gpsState для отправки в телеметрии BLE.
  * Description: Главный файл оркестратора.
  */
 
@@ -155,13 +155,22 @@
     }
  }
  
+ // ИЗМЕНЕНИЕ 1.47.1: Формирование статуса gpsState
  void sendTelemetry() {
     if (bleManager.getBleStatus() == BLE_CONNECTED) {
-       uint8_t gpsValid = gps.hasFix() ? 1 : 0;
+       
+       uint8_t gpsState = GPS_STATE_SEARCHING; // 0
+       if (!gps.isHardwarePresent()) {
+           gpsState = GPS_STATE_NO_HW; // 2
+       } else if (gps.hasFix()) {
+           gpsState = GPS_STATE_FIX_OK; // 1
+       }
+       
        uint8_t satellites = (uint8_t)gps.getSatellites();
        uint8_t battPct = power.getBatteryPercent();
        uint16_t battV = power.getBatteryVoltage();
-       bleManager.sendMyStatus(gpsValid, satellites, battPct, battV);
+       
+       bleManager.sendMyStatus(gpsState, satellites, battPct, battV);
     }
  }
  
@@ -229,17 +238,14 @@
     nodeDB.addNode(myNodeId);
     nodeDB.updateNodeInfo(myNodeId, myName, myNodeType);
  
-    // ИЗМЕНЕНИЕ 1.47.0: Логика загрузки пространственной опоры для без-GPS устройств
     float savedLat = 0.0f;
     float savedLon = 0.0f;
      
     if (!gps.isHardwarePresent() && settingsManager.loadStaticCoordinates(savedLat, savedLon)) {
-        // Если GPS платы нет и в NVS сохранены валидные старые координаты, восстанавливаем их
         gps.setAnchorLocation(savedLat, savedLon);
         packer.updateLonScale(savedLat); 
         LOG_INFO("SYS", "Restored permanent geometric anchor from NVS for blind Node.");
     } else {
-        // Иначе падаем на стандартные жесткие дефолты из конфигурации
         gps.setAnchorLocation(RELAY_STATIC_LAT, RELAY_STATIC_LON);
     }
  
